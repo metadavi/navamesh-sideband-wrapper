@@ -1,0 +1,38 @@
+<!-- This XML snippet is injected directly into the AndroidManifest.xml -->
+<intent-filter>
+   <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+</intent-filter>
+
+<!-- This intent filter allows Sideband to handle clickable LXM links -->
+<intent-filter>
+   <action android:name="android.intent.action.VIEW" />
+   <category android:name="android.intent.category.DEFAULT" />
+   <category android:name="android.intent.category.BROWSABLE" />
+   <data android:scheme="lxm"/>
+</intent-filter>
+
+<!-- This intent filter allows opening scanned LXM URLs directly in Sideband -->
+<intent-filter>
+   <action android:name="android.intent.action.WEB_SEARCH" />
+   <category android:name="android.intent.category.DEFAULT" />
+   <category android:name="android.intent.category.LAUNCHER" />
+</intent-filter>
+
+<intent-filter>
+   <action android:name="android.intent.action.SEND" />
+   <category android:name="android.intent.category.DEFAULT" />
+   <data android:mimeType="text/plain" />
+</intent-filter>
+
+<intent-filter>
+   <action android:name="android.intent.action.SEND" />
+   <category android:name="android.intent.category.DEFAULT" />
+   <data android:mimeType="image/*" />
+   <data android:mimeType="video/*" />
+   <data android:mimeType="audio/*" />
+   <data android:mimeType="text/*" />
+   <data android:mimeType="application/*" />
+</intent-filter>
+
+<meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+    android:resource="@xml/device_filter" />

@@ -1,0 +1,29 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+*.so
+*.pyd
+
+# Kivy / buildozer
+.buildozer/
+bin/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Dev artifacts
+*.log
+
+# Supergoal research clones (embedded git repos)
+.supergoal/farmer-friendly-ui-wrapper-for-navaho-fa-YnxaN6/research/
