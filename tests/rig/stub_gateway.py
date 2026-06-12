@@ -204,8 +204,9 @@ def handle_command(cmd: str, nodes: dict):
 class StubGateway:
     DISPLAY_NAME = "Navamesh Gateway"
 
-    def __init__(self, storagedir: str):
+    def __init__(self, storagedir: str, wirelog: str | None = None):
         self._storagedir = storagedir
+        self._wirelog = wirelog
         self._router = None
         self._source = None
         self._lock = threading.Lock()
@@ -236,6 +237,9 @@ class StubGateway:
             content = message.content.decode("utf-8").strip() if message.content else ""
             title   = message.title.decode("utf-8").strip()   if message.title   else ""
             cmd     = content or title
+            if self._wirelog:
+                with open(self._wirelog, "a") as wf:
+                    wf.write(cmd + "\n")
             text_reply, image_result = handle_command(cmd, self._nodes)
             with self._lock:
                 self._send_reply(message, text_reply, image_result)
@@ -285,11 +289,13 @@ def main():
     ap.add_argument("--storagedir", required=True)
     ap.add_argument("--port",       type=int, required=True)
     ap.add_argument("--hashfile",   required=True)
+    ap.add_argument("--wirelog",    default=None,
+                    help="File to append each received wire content string (one per line)")
     args = ap.parse_args()
 
     rns = RNS.Reticulum(configdir=args.configdir, loglevel=RNS.LOG_WARNING)
 
-    gw = StubGateway(args.storagedir)
+    gw = StubGateway(args.storagedir, wirelog=args.wirelog)
     gw_hash = gw.start()
     gw.announce()
 

@@ -84,6 +84,7 @@ class RnsTestnet:
         self.client_configdir: str = ""
         self.gw_configdir: str = ""
         self.gw_storagedir: str = ""
+        self.wirelog: str = ""  # path to the wire-content log file
 
     def __enter__(self) -> "RnsTestnet":
         self._tmpdir = tempfile.mkdtemp(prefix="navamesh_testnet_")
@@ -92,6 +93,7 @@ class RnsTestnet:
         self.gw_storagedir = os.path.join(self._tmpdir, "gw_lxmf")
         self.client_configdir = os.path.join(self._tmpdir, "client_rns")
         hashfile = os.path.join(self._tmpdir, "gateway.hash")
+        self.wirelog = os.path.join(self._tmpdir, "wire.log")
 
         _write_rns_config(self.gw_configdir, "server", self.port)
         _write_rns_config(self.client_configdir, "client", self.port)
@@ -106,6 +108,7 @@ class RnsTestnet:
                 "--storagedir", self.gw_storagedir,
                 "--port",       str(self.port),
                 "--hashfile",   hashfile,
+                "--wirelog",    self.wirelog,
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
