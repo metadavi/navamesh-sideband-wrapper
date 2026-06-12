@@ -1,0 +1,28 @@
+# Navamesh Farm App — Upstream Pin
+# Generated: 2026-06-12
+# Do not edit manually; guarded by scripts/check_upstream_integrity.sh
+
+[upstream]
+url = https://github.com/markqvist/Sideband.git
+tag = 1.9.7
+commit = 89a0c70635c1660ea8faed65f7ead22b44a3fcf1
+
+[deps]
+rns = 1.3.5
+lxmf = 1.0.1
+
+[protected-path-tree-hashes]
+# sha1 of git tree object at upstream-pin commit
+sbapp/sideband   = 979ce4ea79192c843b4cb7201653b0d3bfc21514
+sbapp/services   = 46a545327b166444d17a9004f6263acc837c1a8a
+sbapp/ui         = c6f205a0fcc8e2680af0524cce45984a1b706364
+sbapp/kivymd     = db937376c9296b24cbd4c07a307e3181228697b4
+sbapp/mapview    = 13174d2c3b473c03a7784340bc5fb2f82862cff0
+sbapp/plyer      = 1dbff8237a5751d37b0bd7868d8b0096769a79b4
+sbapp/pmqtt      = 17a7fa7a36ef8017e09691b7a906f7f9ac5ab715
+sbapp/md         = 7ba285ddf3a7bb2689060031280fe0b0edd58cc9
+sbapp/share      = 07e9e8958f7006a482890bab5aecbfb2e3626cba
+sbapp/patches    = 48044cf65b7d151009ac07dc6e1add8444587be0
+libs             = 82dc2d77884aad3d745939c267f3674417fa28a2
+recipes          = 4374cda4fd978d5093b77e9ec6451fa98fd52193
+sbapp/main_upstream.py = f7e9032cbba801212d3604a3901cc51e49c2e2fe

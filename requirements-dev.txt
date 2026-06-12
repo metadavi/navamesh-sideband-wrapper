@@ -1,0 +1,5 @@
+# Dev dependencies for Navamesh Farm App
+# Pinned for reproducibility
+rns==1.3.5
+lxmf==1.0.1
+pytest>=7.0

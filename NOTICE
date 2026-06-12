@@ -1,0 +1,18 @@
+Navamesh Farm App
+Copyright (c) 2026 Navamesh Project Contributors
+
+This project is a fork of Sideband (https://github.com/markqvist/Sideband)
+by Mark Qvist, licensed under the Creative Commons Attribution-NonCommercial-
+ShareAlike 4.0 International License (CC BY-NC-SA 4.0).
+
+The vendored Sideband source code is pinned at tag 1.9.7 (commit 89a0c70635c1).
+All files under the protected paths listed in UPSTREAM.lock are reproduced
+verbatim from the upstream release and are covered by the original license.
+
+This derivative work is non-commercial (farm utility for the Navamesh project)
+and is distributed under the same CC BY-NC-SA 4.0 license.
+
+License text: https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+The rns and lxmf packages are copyright their respective authors and are used
+as unmodified pip dependencies.
