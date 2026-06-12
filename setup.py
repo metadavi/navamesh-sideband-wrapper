@@ -111,6 +111,7 @@ setuptools.setup(
     entry_points= {
         'console_scripts': [
             'sideband=sbapp:main.run',
+            'navamesh-farm=sbapp.farmui.app:run',
         ]
     },
     install_requires=[
