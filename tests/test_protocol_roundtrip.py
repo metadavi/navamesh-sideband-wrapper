@@ -15,10 +15,6 @@ import pytest
 import RNS
 import LXMF
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "rig"))
-from rns_testnet import RnsTestnet
-
-
 ANNOUNCE_WAIT = 20.0   # seconds to wait for announce propagation
 REPLY_WAIT    = 30.0   # seconds to wait for a reply after sending
 
@@ -88,36 +84,24 @@ class LxmfClient:
 # ── Shared session fixture ────────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
-def session():
+def session(shared_tcp_testnet):
     """
-    Start the testnet + client RNS instance once per module.
+    Module-scoped LXMF client on top of the session-scoped shared TCP testnet.
+    RNS.Reticulum is already initialised by conftest.shared_tcp_testnet.
     Yields dict: {net, client, gw_hash}.
     """
     import tempfile, shutil
     tmpdir = tempfile.mkdtemp(prefix="navamesh_client_")
+    net = shared_tcp_testnet
     try:
-        with RnsTestnet(timeout=60) as net:
-            # Start client-side RNS in this process
-            RNS.Reticulum(configdir=net.client_configdir, loglevel=RNS.LOG_WARNING)
-            client = LxmfClient(storagedir=os.path.join(tmpdir, "lxmf"))
-            client.announce()
-
-            # Wait for gateway announce. Gateway re-announces every 3s at startup.\n            time.sleep(1.0)  # brief settle for TCP connection\n            # Wait for gateway announce to propagate so we can resolve its identity
-            gw_hash_bytes = bytes.fromhex(net.gateway_hash)
-            deadline = time.time() + ANNOUNCE_WAIT
-            resolved = False
-            while time.time() < deadline:
-                if RNS.Identity.recall(gw_hash_bytes) is not None:
-                    resolved = True
-                    break
-                time.sleep(0.5)
-
-            assert resolved, (
-                f"Gateway identity not resolved within {ANNOUNCE_WAIT}s "
-                f"(hash={net.gateway_hash})"
-            )
-
-            yield {"net": net, "client": client, "gw_hash": net.gateway_hash}
+        client = LxmfClient(storagedir=os.path.join(tmpdir, "lxmf"))
+        client.announce()
+        # Gateway identity already resolved by conftest; brief settle for announce
+        time.sleep(1.0)
+        assert RNS.Identity.recall(bytes.fromhex(net.gateway_hash)) is not None, (
+            "Shared gateway identity lost"
+        )
+        yield {"net": net, "client": client, "gw_hash": net.gateway_hash}
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 

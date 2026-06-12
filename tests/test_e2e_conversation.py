@@ -20,9 +20,6 @@ import pytest
 import RNS
 import LXMF
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "rig"))
-from rns_testnet import RnsTestnet
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sbapp"))
 from farmui.dispatch import (
     LxmfDirectDispatcher, CommandReply, DELIVERED, FAILED,
@@ -38,43 +35,41 @@ REPLY_TIMEOUT = 35.0
 # ── Shared session ────────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
-def e2e_session():
+def e2e_session(shared_tcp_testnet):
+    """
+    Module-scoped LXMF dispatcher on top of the session-scoped shared TCP testnet.
+    RNS.Reticulum is already initialised by conftest.shared_tcp_testnet.
+    """
     import tempfile, shutil
     tmpdir = tempfile.mkdtemp(prefix="navamesh_e2e_")
+    net = shared_tcp_testnet
     try:
-        with RnsTestnet(timeout=60) as net:
-            RNS.Reticulum(configdir=net.client_configdir, loglevel=RNS.LOG_WARNING)
+        storagedir = os.path.join(tmpdir, "lxmf")
+        os.makedirs(storagedir, exist_ok=True)
+        id_path = os.path.join(storagedir, "identity")
+        if os.path.exists(id_path):
+            identity = RNS.Identity.from_file(id_path)
+        else:
+            identity = RNS.Identity()
+            identity.to_file(id_path)
 
-            storagedir = os.path.join(tmpdir, "lxmf")
-            os.makedirs(storagedir, exist_ok=True)
-            id_path = os.path.join(storagedir, "identity")
-            if os.path.exists(id_path):
-                identity = RNS.Identity.from_file(id_path)
-            else:
-                identity = RNS.Identity()
-                identity.to_file(id_path)
+        router = LXMF.LXMRouter(storagepath=storagedir, autopeer=False)
+        source = router.register_delivery_identity(identity, display_name="E2EClient")
+        source.announce()
 
-            router = LXMF.LXMRouter(storagepath=storagedir, autopeer=False)
-            source = router.register_delivery_identity(identity, display_name="E2EClient")
-            source.announce()
+        dispatcher = LxmfDirectDispatcher(router, source)
 
-            dispatcher = LxmfDirectDispatcher(router, source)
+        # Gateway already resolved by conftest; verify it's still reachable
+        assert RNS.Identity.recall(bytes.fromhex(net.gateway_hash)) is not None, (
+            "Shared gateway identity lost"
+        )
 
-            gw_hash_bytes = bytes.fromhex(net.gateway_hash)
-            time.sleep(1.0)
-            deadline = time.time() + ANNOUNCE_WAIT
-            while time.time() < deadline:
-                if RNS.Identity.recall(gw_hash_bytes) is not None:
-                    break
-                time.sleep(0.5)
-            assert RNS.Identity.recall(gw_hash_bytes) is not None, "GW identity not resolved"
-
-            yield {
-                "dispatcher": dispatcher,
-                "gw_hash":    net.gateway_hash,
-                "wirelog":    net.wirelog,
-                "net":        net,
-            }
+        yield {
+            "dispatcher": dispatcher,
+            "gw_hash":    net.gateway_hash,
+            "wirelog":    net.wirelog,
+            "net":        net,
+        }
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 

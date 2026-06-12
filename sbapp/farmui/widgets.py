@@ -82,10 +82,10 @@ class StatusChip(Label):
 
     def set_connected(self, is_connected: bool, detail: str = ""):
         if is_connected:
-            self.text = f"● Connected  {detail}".strip()
+            self.text = f"● Radio connected  {detail}".strip()
             self.color = get_color_from_hex(theme.COLOR_CONNECTED)
         else:
-            self.text = "○ No radio connection"
+            self.text = "○ Radio not responding — check the white box"
             self.color = get_color_from_hex(theme.COLOR_DISCONNECTED)
 
 

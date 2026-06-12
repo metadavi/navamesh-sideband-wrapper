@@ -1,0 +1,60 @@
+# rns_udp_hthd01.conf.example — HaLow (HT-HD01) UDPInterface snippet for RNS
+#
+# ── HaLow topology ────────────────────────────────────────────────────────────
+#
+#   [Farmer's phone]
+#       Wi-Fi (2.4/5 GHz) ↕  (same LAN as the phone-side radio)
+#   [HT-HD01 radio — phone side]   <-- joins phone's Wi-Fi, gets a LAN IP
+#       HaLow 900 MHz (up to ~1 km range, penetrates structures) ↕
+#   [HT-HD01 radio — Pi side]      <-- plugged into Pi via USB/Ethernet
+#       Ethernet/USB ↕
+#   [Raspberry Pi — Navamesh gateway]
+#
+# Both HT-HD01 radios act as UDP bridges.  The phone sends UDP packets to the
+# phone-side HT-HD01's LAN IP; that radio tunnels them over HaLow to the Pi-side
+# radio; the Pi-side radio injects them onto the Pi's localhost network where RNS
+# is listening.  The Pi's RNS interface is named HTHD01_UDP (matching this file's
+# convention) in deploy/pi_rns.conf.example.
+#
+# ── How to activate ───────────────────────────────────────────────────────────
+#
+# Option A — Navamesh Farm app (recommended):
+#   Open the app → gear icon → enter the HT-HD01 IP and port → Save.
+#   The app writes only the [[Navamesh HT-HD01]] block into the RNS config
+#   template, leaving every other line byte-identical.
+#
+# Option B — Manual (Sideband desktop or SSH):
+#   1. Open Sideband → Settings → RNS Config Template
+#   2. Paste the [[Navamesh HT-HD01]] block below into the [interfaces] section
+#   3. Replace <PHONE_SIDE_HT_HD01_IP> with the actual LAN IP (e.g. 192.168.4.20)
+#   4. Save; Sideband will restart the RNS instance
+#
+# Default HT-HD01 UDP port: 4242 (check the radio's config web page at its LAN IP)
+#
+# ── Snippet (paste into [interfaces] section of RNS config template) ──────────
+
+[[Navamesh HT-HD01]]
+  type = UDPInterface
+  enabled = yes
+
+  # Bind the phone's RNS instance to receive UDP from the HT-HD01 radio
+  listen_ip = 0.0.0.0
+  listen_port = 4242
+
+  # Forward to the phone-side HT-HD01 radio, which tunnels to the Pi
+  forward_ip = <PHONE_SIDE_HT_HD01_IP>
+  forward_port = 4242
+
+# ── Pi-side reference ─────────────────────────────────────────────────────────
+# On the Raspberry Pi, the matching interface in /etc/reticulum/config is:
+#
+# [[HTHD01_UDP]]
+#   type = UDPInterface
+#   enabled = yes
+#   listen_ip = 127.0.0.1   # or 0.0.0.0 if Pi's HT-HD01 is on a separate subnet
+#   listen_port = 4242
+#   forward_ip = <PI_SIDE_HT_HD01_IP>
+#   forward_port = 4242
+#
+# The Pi-side HT-HD01 delivers packets to 127.0.0.1:4242 on the Pi.
+# See docs/DEPLOYMENT.md for full field-setup instructions.
