@@ -22,6 +22,9 @@ bin/
 .vscode/
 *.swp
 
+# Claude Code local config (machine-local; never commit)
+.claude/
+
 # Dev artifacts
 *.log
 

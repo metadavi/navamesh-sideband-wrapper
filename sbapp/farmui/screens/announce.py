@@ -7,34 +7,29 @@ from kivy.metrics import dp, sp
 from kivy.utils import get_color_from_hex
 
 from ..theme import (
-    COLOR_PRIMARY, COLOR_ON_SURFACE, COLOR_SURFACE,
-    FONT_HEADING, FONT_BODY, FONT_ADDRESS, SCREEN_PADDING,
+    COLOR_ON_SURFACE,
+    FONT_BODY, FONT_ADDRESS, SCREEN_PADDING, SPACE_XS, SPACE_SM, SPACE_MD,
+    TOUCH_TARGET, TAB_HEIGHT,
 )
-from ..widgets import BigButton, StatusChip
+from ..widgets import BigButton, StatusChip, SectionHeading
 
 
 class AnnounceScreen(BoxLayout):
     name = "announce"
 
     def __init__(self, app, **kwargs):
-        super().__init__(orientation="vertical", padding=dp(SCREEN_PADDING), spacing=dp(16), **kwargs)
+        super().__init__(orientation="vertical", padding=dp(SCREEN_PADDING),
+                         spacing=dp(SPACE_MD), **kwargs)
         self._app = app
 
-        self.add_widget(Label(
-            text="📢 Your Farm Address",
-            font_size=sp(FONT_HEADING),
-            color=get_color_from_hex(COLOR_ON_SURFACE),
-            size_hint_y=None,
-            height=dp(48),
-            bold=True,
-        ))
+        self.add_widget(SectionHeading("[font=emoji]📢[/font]  Your Farm Address"))
 
         self._address_label = Label(
             text="(initialising…)",
             font_size=sp(FONT_ADDRESS),
             color=get_color_from_hex(COLOR_ON_SURFACE),
             size_hint_y=None,
-            height=dp(40),
+            height=dp(TOUCH_TARGET),
         )
         self.add_widget(self._address_label)
 
@@ -43,7 +38,7 @@ class AnnounceScreen(BoxLayout):
             font_size=sp(FONT_BODY),
             color=get_color_from_hex(COLOR_ON_SURFACE),
             size_hint_y=None,
-            height=dp(32),
+            height=dp(TOUCH_TARGET),
         )
         self.add_widget(self._last_sent_label)
 
@@ -53,6 +48,28 @@ class AnnounceScreen(BoxLayout):
 
         self._chip = StatusChip()
         self.add_widget(self._chip)
+
+        # ── Settings row ───────────────────────────────────────────────────
+        from kivy.uix.switch import Switch
+        settings_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None, height=dp(TAB_HEIGHT),
+            padding=[dp(SPACE_XS), dp(SPACE_XS)], spacing=dp(SPACE_SM),
+        )
+        settings_row.add_widget(Label(
+            text="Large text  (restart app to apply)",
+            font_size=sp(FONT_BODY),
+            color=get_color_from_hex(COLOR_ON_SURFACE),
+            halign="left",
+        ))
+        self._large_text_sw = Switch(
+            active=app._settings.large_text,
+            size_hint=(None, None),
+            size=(dp(90), dp(TOUCH_TARGET)),
+        )
+        self._large_text_sw.bind(active=self._on_large_text)
+        settings_row.add_widget(self._large_text_sw)
+        self.add_widget(settings_row)
 
         self.add_widget(BoxLayout())  # spacer
 
@@ -65,6 +82,12 @@ class AnnounceScreen(BoxLayout):
     def set_connected(self, connected: bool, detail: str = ""):
         self._chip.set_connected(connected, detail)
 
+    def set_state(self, state: str, detail: str = ""):
+        self._chip.set_state(state, detail)
+
     def _send_announce(self, *_):
         self._app.send_announce()
         self._last_sent_label.text = "Last announce: just now"
+
+    def _on_large_text(self, _sw, active: bool):
+        self._app._settings.large_text = active

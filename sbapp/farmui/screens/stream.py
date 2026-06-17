@@ -10,14 +10,16 @@ from kivy.utils import get_color_from_hex
 from kivy.graphics import Color, Rectangle
 
 from ..theme import (
-    COLOR_ON_SURFACE, COLOR_SURFACE, COLOR_GATEWAY_HIGHLIGHT,
+    COLOR_ON_SURFACE, COLOR_CARD, COLOR_GATEWAY_HIGHLIGHT,
     COLOR_PRIMARY, COLOR_ON_PRIMARY,
-    FONT_HEADING, FONT_BODY, FONT_LABEL, SCREEN_PADDING,
+    FONT_BODY, FONT_CAPTION, SCREEN_PADDING, SPACE_XS, SPACE_SM, SPACE_MD,
+    ROW_HEIGHT, TAB_HEIGHT,
 )
-from ..widgets import BigButton, StatusChip, EmptyState
+from ..widgets import StatusChip, EmptyState, SectionHeading
 
 
 GATEWAY_DISPLAY_NAME = "Navamesh Gateway"
+_MAX_STREAM_ROWS = 200
 
 
 def _is_gateway(display_name: str) -> bool:
@@ -31,22 +33,23 @@ class AnnounceRow(BoxLayout):
                  on_set_gateway=None, **kwargs):
         super().__init__(
             orientation="horizontal",
-            size_hint_y=None, height=dp(72),
-            padding=dp(8), spacing=dp(8),
+            size_hint_y=None, height=dp(ROW_HEIGHT),
+            padding=dp(SPACE_SM), spacing=dp(SPACE_SM),
             **kwargs
         )
         is_gw = _is_gateway(display_name)
-        bg_color = get_color_from_hex(COLOR_GATEWAY_HIGHLIGHT if is_gw else "#FFFFFF")
+        bg_color = get_color_from_hex(COLOR_GATEWAY_HIGHLIGHT if is_gw else COLOR_CARD)
         with self.canvas.before:
             Color(*bg_color)
             self._rect = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=lambda *_: setattr(self._rect, 'pos', self.pos),
                   size=lambda *_: setattr(self._rect, 'size', self.size))
 
-        name_block = BoxLayout(orientation="vertical", spacing=dp(2))
-        prefix = "🌾 " if is_gw else ""
+        name_block = BoxLayout(orientation="vertical", spacing=dp(SPACE_XS))
+        prefix = "[font=emoji]🌾[/font] " if is_gw else ""
         name_block.add_widget(Label(
             text=f"{prefix}{display_name}",
+            markup=True,
             font_size=sp(FONT_BODY),
             color=get_color_from_hex(COLOR_ON_SURFACE),
             halign="left", valign="middle",
@@ -55,7 +58,7 @@ class AnnounceRow(BoxLayout):
         ))
         name_block.add_widget(Label(
             text=f"{short_hash}  ·  {time_ago}",
-            font_size=sp(FONT_LABEL - 2),
+            font_size=sp(FONT_CAPTION),
             color=get_color_from_hex(COLOR_ON_SURFACE),
             halign="left", valign="middle",
             size_hint_y=None, height=dp(20),
@@ -65,11 +68,12 @@ class AnnounceRow(BoxLayout):
         if on_set_gateway:
             btn = Button(
                 text="Set as\nfarm GW",
-                font_size=sp(FONT_LABEL - 2),
+                font_size=sp(FONT_CAPTION),
                 size_hint=(None, None),
-                width=dp(80), height=dp(56),
+                width=dp(80), height=dp(TAB_HEIGHT),
                 background_color=get_color_from_hex(COLOR_PRIMARY),
                 color=get_color_from_hex(COLOR_ON_PRIMARY),
+                bold=True,
             )
             btn.bind(on_press=lambda *_: on_set_gateway(display_name, short_hash))
             self.add_widget(btn)
@@ -79,23 +83,18 @@ class StreamScreen(BoxLayout):
     name = "stream"
 
     def __init__(self, app, **kwargs):
-        super().__init__(orientation="vertical", padding=dp(SCREEN_PADDING), spacing=dp(8), **kwargs)
+        super().__init__(orientation="vertical", padding=dp(SCREEN_PADDING),
+                         spacing=dp(SPACE_MD), **kwargs)
         self._app = app
         self._rows = {}
 
-        self.add_widget(Label(
-            text="📡 Nearby Gateways",
-            font_size=sp(FONT_HEADING),
-            color=get_color_from_hex(COLOR_ON_SURFACE),
-            size_hint_y=None, height=dp(48),
-            bold=True,
-        ))
+        self.add_widget(SectionHeading("[font=emoji]📡[/font]  Nearby Gateways"))
 
         self._chip = StatusChip()
         self.add_widget(self._chip)
 
         scroll = ScrollView(size_hint=(1, 1))
-        self._list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2))
+        self._list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(SPACE_SM))
         self._list.bind(minimum_height=self._list.setter("height"))
         scroll.add_widget(self._list)
         self.add_widget(scroll)
@@ -109,6 +108,11 @@ class StreamScreen(BoxLayout):
     def add_announce(self, display_name: str, short_hash: str, time_ago: str):
         if self._empty.parent:
             self._list.remove_widget(self._empty)
+        if short_hash in self._rows:
+            return
+        while len(self._rows) >= _MAX_STREAM_ROWS:
+            oldest_hash = next(iter(self._rows))
+            self._list.remove_widget(self._rows.pop(oldest_hash))
         row = AnnounceRow(
             display_name=display_name,
             short_hash=short_hash,
@@ -125,3 +129,6 @@ class StreamScreen(BoxLayout):
 
     def set_connected(self, connected: bool, detail: str = ""):
         self._chip.set_connected(connected, detail)
+
+    def set_state(self, state: str, detail: str = ""):
+        self._chip.set_state(state, detail)

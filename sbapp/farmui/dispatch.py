@@ -195,6 +195,33 @@ class CoreDispatcher(AbstractDispatcher):
             return r
         return CommandReply(cmd_key=cmd_key, text="", state=SENDING)
 
+    def send_text(
+        self,
+        gateway_hash_hex: str,
+        content: str,
+        on_reply: Optional[Callable[[CommandReply], None]] = None,
+    ) -> CommandReply:
+        """Send a free-text LXMF message to a peer (used by the Debug tab).
+
+        Uses the SAME correct call shape as send_command: hex→bytes for the
+        destination, and the required positional/keyword args of
+        SidebandCore.send_message(content, destination_hash, propagation, ...).
+        """
+        dest_hash = bytes.fromhex(gateway_hash_hex)
+        try:
+            self._core.send_message(
+                content=content,
+                destination_hash=dest_hash,
+                propagation=False,
+                skip_fields=True,
+            )
+        except Exception as exc:
+            r = CommandReply.failed("message", str(exc))
+            if on_reply:
+                on_reply(r)
+            return r
+        return CommandReply(cmd_key="message", text="", state=SENDING)
+
 
 # ── Reply parser ──────────────────────────────────────────────────────────────
 

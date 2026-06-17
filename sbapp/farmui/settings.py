@@ -1,6 +1,7 @@
 """
 settings.py — farmui-local persistent settings (JSON in app_dir).
 Never touches core/RNS config; stores gateway pinning and UI prefs only.
+RNS interface discovery is handled automatically by Reticulum's AutoInterface.
 """
 from __future__ import annotations
 
@@ -14,8 +15,7 @@ _DEFAULT = {
     "gateway_display_name": None,
     "node_cache":           [],
     "large_text":           False,
-    "hthd01_ip":            "",
-    "hthd01_port":          4242,
+    "dev_mode":             False,
 }
 
 
@@ -76,32 +76,20 @@ class FarmSettings:
         self._save()
 
     @property
-    def hthd01_ip(self) -> str:
-        return self._data.get("hthd01_ip", "")
+    def large_text(self) -> bool:
+        return bool(self._data.get("large_text", False))
 
-    @hthd01_ip.setter
-    def hthd01_ip(self, value: str):
-        self._data["hthd01_ip"] = value.strip()
+    @large_text.setter
+    def large_text(self, value: bool):
+        self._data["large_text"] = bool(value)
         self._save()
 
     @property
-    def hthd01_port(self) -> int:
-        return int(self._data.get("hthd01_port", 4242))
+    def dev_mode(self) -> bool:
+        """Developer mode — surfaces the optional Debug diagnostics tab. Off by default."""
+        return bool(self._data.get("dev_mode", False))
 
-    @hthd01_port.setter
-    def hthd01_port(self, value: int):
-        self._data["hthd01_port"] = int(value)
+    @dev_mode.setter
+    def dev_mode(self, value: bool):
+        self._data["dev_mode"] = bool(value)
         self._save()
-
-    def write_hthd01_to_rns_config(self, rns_config_path: str) -> None:
-        """Write the HT-HD01 UDP interface block into the RNS config file."""
-        if not self.hthd01_ip:
-            raise ValueError("HT-HD01 IP not configured")
-        from .rns_config_writer import write_hthd01_interface
-        write_hthd01_interface(
-            rns_config_path,
-            listen_ip="0.0.0.0",
-            listen_port=self.hthd01_port,
-            forward_ip=self.hthd01_ip,
-            forward_port=self.hthd01_port,
-        )

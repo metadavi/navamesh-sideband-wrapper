@@ -33,13 +33,29 @@ FONT_LABEL    = 16
 FONT_HEADING  = 24
 FONT_TITLE    = 32
 FONT_ADDRESS  = 14   # monospace, LXMF address
+FONT_CAPTION  = 14   # secondary metadata (hash · time, hints)
+FONT_ICON     = 48   # large decorative emoji (empty states)
+
+# ── Spacing scale (dp) ───────────────────────────────────────────────────────
+# One rhythm for every screen: pick the step, never a raw number.
+SPACE_XS = 4
+SPACE_SM = 8
+SPACE_MD = 12
+SPACE_LG = 16
+SPACE_XL = 24
 
 # ── Sizes (dp) ───────────────────────────────────────────────────────────────
-BUTTON_HEIGHT   = 96
-TOUCH_TARGET    = 48
-CARD_PADDING    = 12
-SCREEN_PADDING  = 16
-TAB_HEIGHT      = 56
+BUTTON_HEIGHT        = 96
+TOUCH_TARGET         = 48
+CARD_PADDING         = 12
+CARD_RADIUS          = 12
+SCREEN_PADDING       = 16
+TAB_HEIGHT           = 56
+CHIP_HEIGHT          = 36
+ROW_HEIGHT           = 72
+INPUT_HEIGHT         = 48
+ICON_BOX             = 64   # height of the large empty-state emoji box
+IMAGE_PREVIEW_HEIGHT = 200
 
 
 # ── Contrast helper ──────────────────────────────────────────────────────────

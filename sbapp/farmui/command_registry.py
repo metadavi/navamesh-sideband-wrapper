@@ -23,7 +23,7 @@ COMMANDS: list[Command] = [
     Command("soil",      "soil",      "💧", "Soil moisture",   False),
     Command("battery",   "battery",   "🔋", "Battery",         False),
     Command("position",  "position",  "📍", "Locations",       False),
-    Command("link",      "link",      "📡", "Signal (RSSI)",   False),
+    Command("link",      "link",      "📡", "Signal strength", False),
     Command("map_all",   "map",       "🗺",  "Map — all nodes", False),
     Command("map_one",   "map {id}",  "🗺",  "Map — one node",  True),
     Command("nodes",     "nodes",     "🛰",  "List nodes",      False),
