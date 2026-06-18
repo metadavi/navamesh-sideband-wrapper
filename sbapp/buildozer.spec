@@ -22,7 +22,7 @@ p4a.local_recipes = ../recipes/
 
 icon.filename = %(source.dir)s/assets/farm/icon.png
 presplash.filename = %(source.dir)s/assets/farm/presplash.png
-android.presplash_color = #00000000
+android.presplash_color = #1a0f0a
 
 # TODO: Fix inability to set "user" orientation from spec
 # This is currently handled by patching the APK manifest
