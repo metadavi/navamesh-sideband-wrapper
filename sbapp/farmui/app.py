@@ -79,7 +79,8 @@ class FarmApp(App):
         # is a standard TrueType that SDL2_ttf/FreeType can load on Android.
         # NotoEmoji-Regular.ttf (the 299K Google subset) causes "Couldn't load font"
         # in SDL2_ttf on this p4a build, so we prefer EmojiScaled.ttf.
-        import os
+        # (os is imported at module top; no local re-import — a local `import os`
+        # here would shadow it and make the os.environ use above an UnboundLocalError.)
         from kivy.core.text import LabelBase
         _app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         fonts_dir = os.path.join(_app_root, "assets", "fonts")

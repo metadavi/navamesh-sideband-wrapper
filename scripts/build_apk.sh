@@ -75,19 +75,22 @@ done
 
 mkdir -p "$DIST_DIR"
 
-# --- Step 0: seed the stable debug keystore into the ~/.android volume ---------
-# Buildozer/p4a runs `buildozer android debug`, which has Gradle sign the APK with
-# the Android debug key at $HOME/.android/debug.keystore (HOME=/home/user in this
-# image).  Without intervention that keystore is auto-generated inside each --rm
-# container and is therefore DIFFERENT every build, so Android refuses to install a
-# new APK over an old one (signature mismatch) — forcing an uninstall that wipes the
+# --- Step 0: seed the stable debug keystore into the .android volume -----------
+# Buildozer/p4a runs `buildozer android debug`, which has Gradle (AGP) sign the APK
+# with the default Android debug key at <user.home>/.android/debug.keystore.
+# CRITICAL: the container runs as root and the JVM derives user.home from
+# /etc/passwd → "/root" (NOT $HOME=/home/user).  So AGP looks in /root/.android,
+# and the build step below mounts this volume there (and at /home/user/.android too,
+# for any $HOME-based tools).  Without intervention AGP auto-generates that keystore
+# inside each --rm container — DIFFERENT every build — so Android refuses to install
+# a new APK over an old one (signature mismatch), forcing an uninstall that wipes the
 # device's Reticulum identity + pinned gateway.
 #
 # We commit ONE fixed debug keystore (keystore/navamesh-debug.keystore, the standard
-# androiddebugkey/android credentials) and copy it onto a persistent ~/.android
-# volume so every build signs with the SAME key → APKs install as in-place updates
-# and per-device app data survives.  This is purely a signing/build concern; it does
-# not touch Sideband, RNS, LXMF, or the per-install identity in app_storage.
+# androiddebugkey/android credentials) and copy it onto a persistent volume so every
+# build signs with the SAME key → APKs install as in-place updates and per-device app
+# data survives.  Purely a signing/build concern; it does not touch Sideband, RNS,
+# LXMF, or the per-install identity in app_storage.
 if [ ! -f "$KEYSTORE_FILE" ]; then
   echo "ERROR: stable debug keystore not found at $KEYSTORE_FILE"
   echo "Generate it once with (any machine with a JDK / keytool):"
@@ -230,6 +233,22 @@ echo "--- Injecting device_filter.xml into res_initial + bootstrap template ---"
 _inject_bootstrap_device_filter
 echo ""
 
+# --- Step 1.9: force the debug APK to be re-signed -----------------------------
+# Gradle does NOT track the external debug.keystore as a task input, so on an
+# incremental build it reuses the previously-signed APK and never re-signs with
+# our stable key.  Remove the cached debug APK + packaging/signing intermediates
+# so packageDebug re-runs and signs with the seeded keystore.  (Native libs, dex
+# and merged resources are untouched, so this is a fast re-package, not a rebuild.)
+echo "--- Clearing cached debug APK so it re-signs with the stable keystore ---"
+docker run --rm \
+  --platform linux/amd64 \
+  -v "$BUILD_VOLUME:/home/user/hostcwd/sbapp/.buildozer" \
+  --entrypoint sh "$IMAGE" -c '
+B=/home/user/hostcwd/sbapp/.buildozer/android/platform/build-arm64-v8a/dists/navameshfarm/build
+rm -rf "$B/outputs/apk" "$B/intermediates/apk" "$B/intermediates/signing_config_versions" 2>/dev/null
+echo "cleared cached apk/signing outputs (if present)"'
+echo ""
+
 # --- Step 2: run the build entirely on volumes (no bind mount) -----------------
 # On a first-ever build p4a is cloned during this step; the bootstrap template
 # injection above was a no-op.  If gradle fails we inject into the now-present
@@ -241,6 +260,7 @@ docker run --rm \
   -v "$SRC_VOLUME:/home/user/hostcwd" \
   -v "$CACHE_VOLUME:/home/user/.buildozer" \
   -v "$BUILD_VOLUME:/home/user/hostcwd/sbapp/.buildozer" \
+  -v "$ANDROID_VOLUME:/root/.android" \
   -v "$ANDROID_VOLUME:/home/user/.android" \
   -w /home/user/hostcwd/sbapp \
   "$IMAGE" \
@@ -256,6 +276,7 @@ if [ "$BUILD_STATUS" -ne 0 ]; then
     -v "$SRC_VOLUME:/home/user/hostcwd" \
     -v "$CACHE_VOLUME:/home/user/.buildozer" \
     -v "$BUILD_VOLUME:/home/user/hostcwd/sbapp/.buildozer" \
+    -v "$ANDROID_VOLUME:/root/.android" \
     -v "$ANDROID_VOLUME:/home/user/.android" \
     -w /home/user/hostcwd/sbapp \
     "$IMAGE" \
