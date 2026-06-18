@@ -135,6 +135,11 @@ class FarmApp(App):
         for _scr in (self._ann_screen, self._str_screen, self._conv_screen):
             paint_background(_scr, theme.COLOR_BG)
 
+        # Restore the previously-pinned farm gateway (if any) so the selection
+        # persists across app close / relaunch / phone restart / stable-key
+        # updates. Read from farmui's own settings; no backend state involved.
+        self._restore_gateway()
+
         # The three core farmer tabs are always present.
         tab_specs = [
             (self._ann_screen,  "Announce",     "📢"),
@@ -632,10 +637,34 @@ class FarmApp(App):
         except Exception:
             pass
 
+    def _restore_gateway(self):
+        """Re-pin the saved farm gateway from farmui settings, if one exists.
+
+        Called once during build() after the screens are created. Reads only
+        FarmSettings (app-private JSON); does not touch Sideband/RNS/LXMF.
+        """
+        try:
+            saved_hash = self._settings.gateway_hash
+            if not saved_hash:
+                return
+            saved_name = self._settings.gateway_display_name or "Navamesh Gateway"
+            self.set_gateway(saved_name, saved_hash)
+        except Exception:
+            pass
+
     def set_gateway(self, display_name: str, short_hash: str):
         self._gateway_name = display_name
         self._gateway_hash = short_hash
         self._conv_screen.update_gateway(display_name, short_hash)
+        # Persist the pin so it survives app close, relaunch, phone restart, and
+        # stable-key in-place updates. Stored in farmui's own JSON settings only
+        # (FarmSettings, app-private storage) — never touches Sideband/RNS state.
+        # Switching gateways later (tapping a different row in Stream) calls this
+        # again and overwrites the stored pin.
+        try:
+            self._settings.set_gateway(display_name, short_hash)
+        except Exception:
+            pass
 
     def dispatch_command(self, cmd_key: str, node_id: str | None = None, on_complete=None):
         wire = get_wire(cmd_key, node_id)
