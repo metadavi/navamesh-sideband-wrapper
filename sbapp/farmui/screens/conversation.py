@@ -8,13 +8,21 @@ from kivy.uix.label import Label
 from kivy.metrics import dp, sp
 from kivy.utils import get_color_from_hex
 
+from .. import theme
 from ..theme import (
-    COLOR_ON_SURFACE, FONT_LABEL, SCREEN_PADDING, SPACE_SM, SPACE_MD, TOUCH_TARGET,
+    COLOR_ON_SURFACE, COLOR_MUTED,
+    FONT_LABEL, FONT_CAPTION, SCREEN_PADDING, SPACE_SM, SPACE_MD,
+    TOUCH_TARGET,
 )
-from ..widgets import BigButton, ResultCard, StatusChip, EmptyState, SectionHeading
+from ..widgets import BigButton, ResultCard, StatusChip, EmptyState, SectionHeading, Panel
 from ..command_registry import COMMANDS
 
 _MAX_CARDS = 100
+
+
+def _mono_kw():
+    fam = theme.family(theme.FONT_MONO)
+    return {"font_name": fam} if fam else {}
 
 
 class ConversationScreen(BoxLayout):
@@ -27,25 +35,40 @@ class ConversationScreen(BoxLayout):
         self._in_flight = False
         self._result_cards: list = []
 
-        # ── Gateway header ─────────────────────────────────────────────────
+        # ── Gateway header (Field-Log status card) ──────────────────────────
+        header = Panel(size_hint_y=None)
+        header.bind(minimum_height=header.setter("height"))
+        gw_caption = Label(
+            text="FARM GATEWAY",
+            font_size=sp(FONT_CAPTION),
+            color=get_color_from_hex(COLOR_MUTED),
+            halign="left", valign="middle",
+            size_hint_y=None, height=dp(TOUCH_TARGET) / 2,
+            **_mono_kw(),
+        )
+        gw_caption.bind(width=lambda i, w: setattr(i, "text_size", (w, None)))
+        header.add_widget(gw_caption)
         self._gw_label = Label(
-            text="Gateway: (none pinned — tap stream to set)",
+            text="None pinned — open the 📡 Stream tab to set one",
+            markup=True,
             font_size=sp(FONT_LABEL),
             color=get_color_from_hex(COLOR_ON_SURFACE),
             size_hint_y=None, height=dp(TOUCH_TARGET),
-            halign="left",
+            halign="left", valign="middle",
         )
-        self.add_widget(self._gw_label)
+        self._gw_label.bind(width=lambda i, w: setattr(i, "text_size", (w, None)))
+        header.add_widget(self._gw_label)
+        self.add_widget(header)
 
         self._chip = StatusChip()
         self.add_widget(self._chip)
 
-        # ── Command button grid (3×3) ──────────────────────────────────────
+        # ── Command button grid (3×3, parchment command tiles) ──────────────
         grid = GridLayout(cols=3, size_hint_y=None, spacing=dp(SPACE_MD))
         grid.bind(minimum_height=grid.setter("height"))
         self._cmd_buttons: list[BigButton] = []
         for cmd in COMMANDS:
-            btn = BigButton(icon=cmd.icon, label=cmd.label)
+            btn = BigButton(icon=cmd.icon, label=cmd.label, variant="command")
             btn.bind(on_press=lambda _, c=cmd: self._on_command(c))
             grid.add_widget(btn)
             self._cmd_buttons.append(btn)
@@ -67,7 +90,10 @@ class ConversationScreen(BoxLayout):
         self.add_widget(scroll)
 
     def update_gateway(self, display_name: str, short_hash: str):
-        self._gw_label.text = f"Gateway: {display_name} [{short_hash}]"
+        self._gw_label.text = (
+            f"[b]{display_name}[/b]  "
+            f"[color={COLOR_MUTED.lstrip('#')}]{short_hash}[/color]"
+        )
         if self._onboarding.parent:
             self._msgs.remove_widget(self._onboarding)
         if not self._empty.parent and not self._result_cards:

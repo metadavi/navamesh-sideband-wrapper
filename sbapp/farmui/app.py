@@ -90,6 +90,25 @@ class FarmApp(App):
                 LabelBase.register("emoji", fn_regular=_path)
                 break
 
+        # Navamesh type registers, from fonts already bundled by upstream — no
+        # new assets. mono carries addresses/IDs/timestamps (the JetBrains Mono
+        # role on the cloud dashboard); body/display approximate Inter Tight /
+        # the serif reading weight with NotoSans. Registration is defensive:
+        # theme.family() returns None for any family that failed to load, so a
+        # missing TTF degrades to Kivy's default font instead of crashing.
+        for _family, _file in (
+            (theme.FONT_MONO,           "RobotoMonoNerdFont-Regular.ttf"),
+            (theme.FONT_BODY_FAMILY,    "NotoSans-Regular.ttf"),
+            (theme.FONT_DISPLAY_FAMILY, "NotoSans-Bold.ttf"),
+        ):
+            _fp = os.path.join(fonts_dir, _file)
+            if os.path.exists(_fp):
+                try:
+                    LabelBase.register(_family, fn_regular=_fp)
+                    theme.register_family(_family)
+                except Exception:
+                    pass
+
         Window.clearcolor = get_color_from_hex(theme.COLOR_BG)
 
         # Only force a fixed size on desktop dev; on Android use the full screen
@@ -98,11 +117,23 @@ class FarmApp(App):
             Window.size = (480, 854)
 
         root = BoxLayout(orientation="vertical")
-        tabs = TabbedPanel(do_default_tab=False, size_hint=(1, 1))
+        root.add_widget(self._build_topbar())
+
+        tabs = TabbedPanel(do_default_tab=False, size_hint=(1, 1),
+                           tab_height=dp(theme.TAB_HEIGHT))
+        # Content frame behind the screens reads as parchment, not Kivy gray.
+        tabs.background_color = get_color_from_hex(theme.COLOR_BG)
 
         self._ann_screen  = AnnounceScreen(app=self)
         self._str_screen  = StreamScreen(app=self)
         self._conv_screen = ConversationScreen(app=self)
+
+        # Paint the parchment content surface behind each screen. TabbedPanel
+        # draws its own dark content background that tabs.background_color does
+        # not fully override, so we fill the screens directly (Field Parchment).
+        from .widgets import paint_background
+        for _scr in (self._ann_screen, self._str_screen, self._conv_screen):
+            paint_background(_scr, theme.COLOR_BG)
 
         # The three core farmer tabs are always present.
         tab_specs = [
@@ -125,11 +156,77 @@ class FarmApp(App):
                 text=f"[font=emoji]{icon}[/font]\n{label}",
                 markup=True,
             )
+            self._style_tab_header(tab)
             tab.content = screen
             tabs.add_widget(tab)
 
         root.add_widget(tabs)
         return root
+
+    def _build_topbar(self):
+        """Canyon Dark 'instrument frame' top bar: brand mark + wordmark.
+
+        Branding only — it intentionally holds no live state, so the polling
+        path (_poll → screen.set_state) is untouched. Per-screen status chips
+        continue to carry connectivity.
+        """
+        from kivy.uix.label import Label as _Label
+        from kivy.graphics import Color, Rectangle
+        from .widgets import BrandMark
+        from .widgets import _mono  # mono-family kwargs helper
+
+        bar = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None, height=dp(theme.TOPBAR_HEIGHT),
+            padding=[dp(theme.SCREEN_PADDING), dp(theme.SPACE_XS)],
+            spacing=dp(theme.SPACE_SM),
+        )
+        with bar.canvas.before:
+            Color(*get_color_from_hex(theme.COLOR_CHROME))
+            bar._bg = Rectangle(pos=bar.pos, size=bar.size)
+        bar.bind(pos=lambda *_: setattr(bar._bg, "pos", bar.pos),
+                 size=lambda *_: setattr(bar._bg, "size", bar.size))
+
+        bar.add_widget(BrandMark())
+        wordmark = _Label(
+            text="NAVAMESH",
+            markup=True, bold=True,
+            font_size=sp(theme.FONT_LABEL),
+            color=get_color_from_hex(theme.COLOR_ON_CHROME),
+            halign="left", valign="middle",
+            **_mono(),
+        )
+        wordmark.bind(size=lambda inst, _s: setattr(inst, "text_size", inst.size))
+        bar.add_widget(wordmark)
+
+        tagline = _Label(
+            text="FIELD LINK",
+            font_size=sp(theme.FONT_CAPTION),
+            color=get_color_from_hex(theme.COLOR_ACCENT),
+            halign="right", valign="middle",
+            **_mono(),
+        )
+        tagline.bind(size=lambda inst, _s: setattr(inst, "text_size", inst.size))
+        bar.add_widget(tagline)
+        return bar
+
+    @staticmethod
+    def _style_tab_header(tab):
+        """Dark instrument-frame tab: Sandstone Gold label when active,
+        dimmed ghost-light when inactive. Background atlas is tinted Canyon
+        Dark so the whole strip reads as the dark frame."""
+        tab.background_color = get_color_from_hex(theme.COLOR_CHROME)
+        tab.font_size = sp(theme.FONT_CAPTION)
+
+        def _update(_inst, state):
+            active = (state == "down")
+            tab.color = get_color_from_hex(
+                theme.COLOR_ACCENT if active else theme.COLOR_GHOST)
+            tab.bold = active
+
+        tab.bind(state=_update)
+        _update(tab, tab.state)
+        return tab
 
     def on_start(self):
         # Defer backend bring-up off on_start so the UI's SDL/graphics stack

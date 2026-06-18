@@ -7,13 +7,14 @@ from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.metrics import dp, sp
 from kivy.utils import get_color_from_hex
-from kivy.graphics import Color, Rectangle
+from kivy.graphics import Color, RoundedRectangle, Line
 
+from .. import theme
 from ..theme import (
-    COLOR_ON_SURFACE, COLOR_CARD, COLOR_GATEWAY_HIGHLIGHT,
-    COLOR_PRIMARY, COLOR_ON_PRIMARY,
+    COLOR_ON_SURFACE, COLOR_MUTED, COLOR_CARD, COLOR_HAIRLINE,
+    COLOR_GATEWAY_HIGHLIGHT, COLOR_PRIMARY, COLOR_ON_PRIMARY,
     FONT_BODY, FONT_CAPTION, SCREEN_PADDING, SPACE_XS, SPACE_SM, SPACE_MD,
-    ROW_HEIGHT, TAB_HEIGHT,
+    ROW_HEIGHT, TAB_HEIGHT, CARD_RADIUS, HAIRLINE_WIDTH,
 )
 from ..widgets import StatusChip, EmptyState, SectionHeading
 
@@ -26,8 +27,58 @@ def _is_gateway(display_name: str) -> bool:
     return display_name.strip() == GATEWAY_DISPLAY_NAME
 
 
+def _mono_kw():
+    fam = theme.family(theme.FONT_MONO)
+    return {"font_name": fam} if fam else {}
+
+
+def _set_button(primary: bool, on_press) -> Button:
+    """A compact 'Set as farm GW' control. Mesa Red (primary) marks the one
+    most-important action — the gateway row — while other rows get a quiet
+    outlined variant so Mesa Red stays rare (the Rarity Rule)."""
+    btn = Button(
+        text="Set as\nfarm GW",
+        font_size=sp(FONT_CAPTION),
+        size_hint=(None, None),
+        width=dp(84), height=dp(TAB_HEIGHT),
+        halign="center", valign="middle",
+        bold=primary,
+        background_normal="", background_down="",
+        background_color=(0, 0, 0, 0),
+    )
+    if primary:
+        fill = get_color_from_hex(COLOR_PRIMARY)
+        fill_down = get_color_from_hex(theme.COLOR_MESA_RED)
+        btn.color = get_color_from_hex(COLOR_ON_PRIMARY)
+        border = None
+    else:
+        fill = get_color_from_hex(COLOR_CARD)
+        fill_down = get_color_from_hex(COLOR_GATEWAY_HIGHLIGHT)
+        btn.color = get_color_from_hex(COLOR_ON_SURFACE)
+        border = get_color_from_hex(COLOR_HAIRLINE)
+    radius = dp(TAB_HEIGHT) / 2
+    with btn.canvas.before:
+        bg = Color(*fill)
+        rect = RoundedRectangle(pos=btn.pos, size=btn.size, radius=[radius])
+        if border is not None:
+            Color(*border)
+            line = Line(width=dp(HAIRLINE_WIDTH),
+                        rounded_rectangle=(btn.x, btn.y, btn.width, btn.height, radius))
+        else:
+            line = None
+
+    def _sync(*_):
+        rect.pos, rect.size = btn.pos, btn.size
+        if line is not None:
+            line.rounded_rectangle = (btn.x, btn.y, btn.width, btn.height, radius)
+    btn.bind(pos=_sync, size=_sync,
+             state=lambda _i, s: setattr(bg, "rgba", fill_down if s == "down" else fill))
+    btn.bind(on_press=lambda *_: on_press())
+    return btn
+
+
 class AnnounceRow(BoxLayout):
-    """Single row in the announce stream list."""
+    """Single row in the announce stream list — a Field-Log tile."""
 
     def __init__(self, display_name: str, short_hash: str, time_ago: str,
                  on_set_gateway=None, **kwargs):
@@ -38,12 +89,15 @@ class AnnounceRow(BoxLayout):
             **kwargs
         )
         is_gw = _is_gateway(display_name)
-        bg_color = get_color_from_hex(COLOR_GATEWAY_HIGHLIGHT if is_gw else COLOR_CARD)
+        fill = get_color_from_hex(COLOR_GATEWAY_HIGHLIGHT if is_gw else COLOR_CARD)
+        radius = dp(CARD_RADIUS)
         with self.canvas.before:
-            Color(*bg_color)
-            self._rect = Rectangle(pos=self.pos, size=self.size)
-        self.bind(pos=lambda *_: setattr(self._rect, 'pos', self.pos),
-                  size=lambda *_: setattr(self._rect, 'size', self.size))
+            Color(*fill)
+            self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[radius])
+            Color(*get_color_from_hex(COLOR_HAIRLINE))
+            self._line = Line(width=dp(HAIRLINE_WIDTH),
+                              rounded_rectangle=(self.x, self.y, self.width, self.height, radius))
+        self.bind(pos=self._sync, size=self._sync)
 
         name_block = BoxLayout(orientation="vertical", spacing=dp(SPACE_XS))
         prefix = "[font=emoji]🌾[/font] " if is_gw else ""
@@ -56,27 +110,28 @@ class AnnounceRow(BoxLayout):
             size_hint_y=None, height=dp(28),
             bold=is_gw,
         ))
-        name_block.add_widget(Label(
+        sub = Label(
             text=f"{short_hash}  ·  {time_ago}",
             font_size=sp(FONT_CAPTION),
-            color=get_color_from_hex(COLOR_ON_SURFACE),
+            color=get_color_from_hex(COLOR_MUTED),
             halign="left", valign="middle",
             size_hint_y=None, height=dp(20),
-        ))
+            **_mono_kw(),
+        )
+        sub.bind(width=lambda i, w: setattr(i, "text_size", (w, None)))
+        name_block.add_widget(sub)
         self.add_widget(name_block)
 
         if on_set_gateway:
-            btn = Button(
-                text="Set as\nfarm GW",
-                font_size=sp(FONT_CAPTION),
-                size_hint=(None, None),
-                width=dp(80), height=dp(TAB_HEIGHT),
-                background_color=get_color_from_hex(COLOR_PRIMARY),
-                color=get_color_from_hex(COLOR_ON_PRIMARY),
-                bold=True,
-            )
-            btn.bind(on_press=lambda *_: on_set_gateway(display_name, short_hash))
-            self.add_widget(btn)
+            self.add_widget(_set_button(
+                primary=is_gw,
+                on_press=lambda: on_set_gateway(display_name, short_hash),
+            ))
+
+    def _sync(self, *_):
+        radius = dp(CARD_RADIUS)
+        self._rect.pos, self._rect.size = self.pos, self.size
+        self._line.rounded_rectangle = (self.x, self.y, self.width, self.height, radius)
 
 
 class StreamScreen(BoxLayout):
