@@ -21,6 +21,8 @@ android.gradle_dependencies =  com.android.support:support-compat:28.0.0
 p4a.local_recipes = ../recipes/
 
 icon.filename = %(source.dir)s/assets/farm/icon.png
+icon.adaptive_foreground.filename = %(source.dir)s/assets/farm/icon_fg.png
+icon.adaptive_background.filename = %(source.dir)s/assets/farm/icon_bg.png
 presplash.filename = %(source.dir)s/assets/farm/presplash.png
 android.presplash_color = #1a0f0a
 
