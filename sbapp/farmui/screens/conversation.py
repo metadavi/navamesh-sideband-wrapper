@@ -8,21 +8,18 @@ from kivy.uix.label import Label
 from kivy.metrics import dp, sp
 from kivy.utils import get_color_from_hex
 
-from .. import theme
 from ..theme import (
     COLOR_ON_SURFACE, COLOR_MUTED,
-    FONT_LABEL, FONT_CAPTION, SCREEN_PADDING, SPACE_SM, SPACE_MD,
+    FONT_LABEL, SCREEN_PADDING, SPACE_SM, SPACE_MD,
     TOUCH_TARGET,
 )
-from ..widgets import BigButton, ResultCard, StatusChip, EmptyState, SectionHeading, Panel
+from ..widgets import (
+    BigButton, ResultCard, StatusChip, EmptyState, SectionHeading, Panel, BackBar,
+)
 from ..command_registry import COMMANDS
+from ..textfmt import render_reply
 
 _MAX_CARDS = 100
-
-
-def _mono_kw():
-    fam = theme.family(theme.FONT_MONO)
-    return {"font_name": fam} if fam else {}
 
 
 class ConversationScreen(BoxLayout):
@@ -34,37 +31,34 @@ class ConversationScreen(BoxLayout):
         self._app = app
         self._in_flight = False
         self._result_cards: list = []
+        self._waiting = None  # transient "Waiting for reply…" placeholder card
 
-        # ── Gateway header (Field-Log status card) ──────────────────────────
-        header = Panel(size_hint_y=None)
-        header.bind(minimum_height=header.setter("height"))
-        gw_caption = Label(
-            text="FARM GATEWAY",
-            font_size=sp(FONT_CAPTION),
-            color=get_color_from_hex(COLOR_MUTED),
-            halign="left", valign="middle",
-            size_hint_y=None, height=dp(TOUCH_TARGET) / 2,
-            **_mono_kw(),
-        )
-        gw_caption.bind(width=lambda i, w: setattr(i, "text_size", (w, None)))
-        header.add_widget(gw_caption)
+        # ── Back to Talk ────────────────────────────────────────────────────
+        self.add_widget(BackBar(title="Gateway commands", on_back=app.go_home))
+
+        # ── Gateway header (compact Field-Log status strip) ─────────────────
+        # A single short line — "GATEWAY" caption + name + truncated hash — so the
+        # reply area below gets the vertical space, not the header.
+        header = Panel(size_hint_y=None, height=dp(TOUCH_TARGET),
+                       padding=dp(SPACE_SM), spacing=0)
         self._gw_label = Label(
-            text="None pinned — open the 📡 Stream tab to set one",
+            text=self._gw_markup(None, None),
             markup=True,
             font_size=sp(FONT_LABEL),
             color=get_color_from_hex(COLOR_ON_SURFACE),
-            size_hint_y=None, height=dp(TOUCH_TARGET),
+            size_hint_y=1,
             halign="left", valign="middle",
+            shorten=True, shorten_from="right",
         )
-        self._gw_label.bind(width=lambda i, w: setattr(i, "text_size", (w, None)))
+        self._gw_label.bind(size=lambda i, _s: setattr(i, "text_size", i.size))
         header.add_widget(self._gw_label)
         self.add_widget(header)
 
         self._chip = StatusChip()
         self.add_widget(self._chip)
 
-        # ── Command button grid (3×3, parchment command tiles) ──────────────
-        grid = GridLayout(cols=3, size_hint_y=None, spacing=dp(SPACE_MD))
+        # ── Command button grid (3×3, compact parchment command tiles) ──────
+        grid = GridLayout(cols=3, size_hint_y=None, spacing=dp(SPACE_SM))
         grid.bind(minimum_height=grid.setter("height"))
         self._cmd_buttons: list[BigButton] = []
         for cmd in COMMANDS:
@@ -82,25 +76,64 @@ class ConversationScreen(BoxLayout):
         self._msgs.bind(minimum_height=self._msgs.setter("height"))
         self._empty = EmptyState(icon="💬", message="No replies yet.\nTap a command above.")
         self._onboarding = ResultCard(
-            text="[font=emoji]👋[/font] Welcome!\nGo to the [font=emoji]📡[/font] Stream tab to find your farm gateway,\nthen tap 'Set as farm GW' to connect.",
+            text="[font=emoji]👋[/font] Welcome!\nGo to the [font=emoji]💬[/font] Talk tab and tap your farm gateway\nto open these commands.",
             use_markup=True,
         )
         self._msgs.add_widget(self._onboarding)
         scroll.add_widget(self._msgs)
         self.add_widget(scroll)
 
+    @staticmethod
+    def _gw_markup(display_name: str | None, short_hash: str | None) -> str:
+        muted = COLOR_MUTED.lstrip("#")
+        if not display_name:
+            return (f"[color={muted}]GATEWAY[/color]  "
+                    "None selected — tap a gateway in the Talk tab")
+        return (f"[color={muted}]GATEWAY[/color]  [b]{display_name}[/b]  "
+                f"[color={muted}]{short_hash}[/color]")
+
     def update_gateway(self, display_name: str, short_hash: str):
-        self._gw_label.text = (
-            f"[b]{display_name}[/b]  "
-            f"[color={COLOR_MUTED.lstrip('#')}]{short_hash}[/color]"
-        )
+        self._gw_label.text = self._gw_markup(display_name, short_hash)
         if self._onboarding.parent:
             self._msgs.remove_widget(self._onboarding)
         if not self._empty.parent and not self._result_cards:
             self._msgs.add_widget(self._empty)
 
+    def _clear_results(self):
+        """Drop every card so the screen reads like a live dashboard, not a log.
+
+        Called when a new command is sent: the previous reply is removed so only
+        the latest gateway response stays visible.
+        """
+        for card in self._result_cards:
+            self._msgs.remove_widget(card)
+        self._result_cards.clear()
+        if self._waiting is not None and self._waiting.parent:
+            self._msgs.remove_widget(self._waiting)
+        self._waiting = None
+        if self._onboarding.parent:
+            self._msgs.remove_widget(self._onboarding)
+        if self._empty.parent:
+            self._msgs.remove_widget(self._empty)
+
+    def reset_replies(self):
+        """Start a fresh gateway session (called when entering the chat)."""
+        self._clear_results()
+        if not self._empty.parent:
+            self._msgs.add_widget(self._empty)
+
+    def _show_waiting(self):
+        self._waiting = ResultCard(
+            text="[font=emoji]⏳[/font] Waiting for reply…", use_markup=True)
+        self._msgs.add_widget(self._waiting)
+
     def add_result(self, text: str, image_bytes: bytes | None = None,
                    image_ext: str = "png"):
+        # The waiting placeholder and any older reply are replaced — only the
+        # most recent gateway reply remains (a clean dashboard, not a history).
+        if self._waiting is not None and self._waiting.parent:
+            self._msgs.remove_widget(self._waiting)
+            self._waiting = None
         if self._onboarding.parent:
             self._msgs.remove_widget(self._onboarding)
         if self._empty.parent:
@@ -108,7 +141,8 @@ class ConversationScreen(BoxLayout):
         while len(self._result_cards) >= _MAX_CARDS:
             oldest = self._result_cards.pop(0)
             self._msgs.remove_widget(oldest)
-        card = ResultCard(text=text, image_bytes=image_bytes, image_ext=image_ext)
+        card = ResultCard(text=render_reply(text), image_bytes=image_bytes,
+                          image_ext=image_ext, use_markup=True, mono=True)
         self._result_cards.append(card)
         self._msgs.add_widget(card)
 
@@ -132,6 +166,9 @@ class ConversationScreen(BoxLayout):
             return
         self._in_flight = True
         self._set_buttons_enabled(False)
+        # Replace the previous reply the moment a new command is sent.
+        self._clear_results()
+        self._show_waiting()
         if cmd.needs_node:
             self._app.open_node_picker(cmd, on_complete=self._on_command_done)
         else:

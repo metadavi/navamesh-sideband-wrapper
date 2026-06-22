@@ -1,10 +1,14 @@
-"""screens/stream.py — Announce stream: heard gateways highlighted, tap to pin."""
+"""screens/stream.py — Talk tab: every heard device, tap a row to open its chat.
+
+Rows are uniform and tappable — the gateway-vs-peer decision is made only when
+the user taps a device (FarmApp.open_chat → is_gateway_device), so this screen
+never pre-classifies devices.
+"""
 from __future__ import annotations
 
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
-from kivy.uix.button import Button
 from kivy.metrics import dp, sp
 from kivy.utils import get_color_from_hex
 from kivy.graphics import Color, RoundedRectangle, Line
@@ -12,19 +16,16 @@ from kivy.graphics import Color, RoundedRectangle, Line
 from .. import theme
 from ..theme import (
     COLOR_ON_SURFACE, COLOR_MUTED, COLOR_CARD, COLOR_HAIRLINE,
-    COLOR_GATEWAY_HIGHLIGHT, COLOR_PRIMARY, COLOR_ON_PRIMARY,
-    FONT_BODY, FONT_CAPTION, SCREEN_PADDING, SPACE_XS, SPACE_SM, SPACE_MD,
-    ROW_HEIGHT, TAB_HEIGHT, CARD_RADIUS, HAIRLINE_WIDTH,
+    FONT_BODY, FONT_CAPTION, FONT_HEADING,
+    SCREEN_PADDING, SPACE_XS, SPACE_SM, SPACE_MD,
+    ROW_HEIGHT, CARD_RADIUS, HAIRLINE_WIDTH,
 )
 from ..widgets import StatusChip, EmptyState, SectionHeading
+# Re-exported for backward compatibility; the canonical helper now lives in
+# farmui.devices so the gateway/peer rule has a single home.
+from ..devices import is_gateway_device, GATEWAY_DISPLAY_NAME  # noqa: F401
 
-
-GATEWAY_DISPLAY_NAME = "Navamesh Gateway"
 _MAX_STREAM_ROWS = 200
-
-
-def _is_gateway(display_name: str) -> bool:
-    return display_name.strip() == GATEWAY_DISPLAY_NAME
 
 
 def _mono_kw():
@@ -32,67 +33,33 @@ def _mono_kw():
     return {"font_name": fam} if fam else {}
 
 
-def _set_button(primary: bool, on_press) -> Button:
-    """A compact 'Set as farm GW' control. Mesa Red (primary) marks the one
-    most-important action — the gateway row — while other rows get a quiet
-    outlined variant so Mesa Red stays rare (the Rarity Rule)."""
-    btn = Button(
-        text="Set as\nfarm GW",
-        font_size=sp(FONT_CAPTION),
-        size_hint=(None, None),
-        width=dp(84), height=dp(TAB_HEIGHT),
-        halign="center", valign="middle",
-        bold=primary,
-        background_normal="", background_down="",
-        background_color=(0, 0, 0, 0),
-    )
-    if primary:
-        fill = get_color_from_hex(COLOR_PRIMARY)
-        fill_down = get_color_from_hex(theme.COLOR_MESA_RED)
-        btn.color = get_color_from_hex(COLOR_ON_PRIMARY)
-        border = None
-    else:
-        fill = get_color_from_hex(COLOR_CARD)
-        fill_down = get_color_from_hex(COLOR_GATEWAY_HIGHLIGHT)
-        btn.color = get_color_from_hex(COLOR_ON_SURFACE)
-        border = get_color_from_hex(COLOR_HAIRLINE)
-    radius = dp(TAB_HEIGHT) / 2
-    with btn.canvas.before:
-        bg = Color(*fill)
-        rect = RoundedRectangle(pos=btn.pos, size=btn.size, radius=[radius])
-        if border is not None:
-            Color(*border)
-            line = Line(width=dp(HAIRLINE_WIDTH),
-                        rounded_rectangle=(btn.x, btn.y, btn.width, btn.height, radius))
-        else:
-            line = None
-
-    def _sync(*_):
-        rect.pos, rect.size = btn.pos, btn.size
-        if line is not None:
-            line.rounded_rectangle = (btn.x, btn.y, btn.width, btn.height, radius)
-    btn.bind(pos=_sync, size=_sync,
-             state=lambda _i, s: setattr(bg, "rgba", fill_down if s == "down" else fill))
-    btn.bind(on_press=lambda *_: on_press())
-    return btn
-
-
 class AnnounceRow(BoxLayout):
-    """Single row in the announce stream list — a Field-Log tile."""
+    """A single, uniform, tappable device row in the Talk list (Field-Log tile).
+
+    A tap (press + release that barely moves) opens the device's chat; a drag is
+    left to the enclosing ScrollView. Tap-vs-drag is measured in window coords
+    (touch.x/y, stable across down/up) like ResultCard's inline-map handling.
+    """
 
     def __init__(self, display_name: str, short_hash: str, time_ago: str,
-                 on_set_gateway=None, **kwargs):
+                 on_open=None, **kwargs):
         super().__init__(
             orientation="horizontal",
             size_hint_y=None, height=dp(ROW_HEIGHT),
             padding=dp(SPACE_SM), spacing=dp(SPACE_SM),
             **kwargs
         )
-        is_gw = _is_gateway(display_name)
-        fill = get_color_from_hex(COLOR_GATEWAY_HIGHLIGHT if is_gw else COLOR_CARD)
+        self._on_open = on_open
+        self._display_name = display_name
+        self._short_hash = short_hash
+        # Per-instance touch key: every row in the list shares one touch.ud dict,
+        # so a shared literal key would be popped by whichever row is dispatched
+        # first on touch-up (regardless of collision), leaving only one row
+        # tappable. Keying by id(self) isolates each row's own press.
+        self._press_key = f"_row_press_{id(self)}"
         radius = dp(CARD_RADIUS)
         with self.canvas.before:
-            Color(*fill)
+            Color(*get_color_from_hex(COLOR_CARD))
             self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[radius])
             Color(*get_color_from_hex(COLOR_HAIRLINE))
             self._line = Line(width=dp(HAIRLINE_WIDTH),
@@ -100,15 +67,12 @@ class AnnounceRow(BoxLayout):
         self.bind(pos=self._sync, size=self._sync)
 
         name_block = BoxLayout(orientation="vertical", spacing=dp(SPACE_XS))
-        prefix = "[font=emoji]🌾[/font] " if is_gw else ""
         name_block.add_widget(Label(
-            text=f"{prefix}{display_name}",
-            markup=True,
+            text=display_name,
             font_size=sp(FONT_BODY),
             color=get_color_from_hex(COLOR_ON_SURFACE),
             halign="left", valign="middle",
             size_hint_y=None, height=dp(28),
-            bold=is_gw,
         ))
         sub = Label(
             text=f"{short_hash}  ·  {time_ago}",
@@ -122,20 +86,38 @@ class AnnounceRow(BoxLayout):
         name_block.add_widget(sub)
         self.add_widget(name_block)
 
-        if on_set_gateway:
-            self.add_widget(_set_button(
-                primary=is_gw,
-                on_press=lambda: on_set_gateway(display_name, short_hash),
-            ))
+        # Chevron affordance so the row reads as "tap to open".
+        self.add_widget(Label(
+            text="›",
+            font_size=sp(FONT_HEADING),
+            color=get_color_from_hex(COLOR_MUTED),
+            size_hint_x=None, width=dp(24),
+            halign="center", valign="middle",
+        ))
 
     def _sync(self, *_):
         radius = dp(CARD_RADIUS)
         self._rect.pos, self._rect.size = self.pos, self.size
         self._line.rounded_rectangle = (self.x, self.y, self.width, self.height, radius)
 
+    def on_touch_down(self, touch):
+        if self.collide_point(*touch.pos):
+            touch.ud[self._press_key] = (touch.x, touch.y)
+        return super().on_touch_down(touch)
+
+    def on_touch_up(self, touch):
+        origin = touch.ud.pop(self._press_key, None)
+        if origin is not None and self._on_open is not None:
+            moved = (abs(touch.x - origin[0]) > dp(SPACE_MD) or
+                     abs(touch.y - origin[1]) > dp(SPACE_MD))
+            if not moved and self.collide_point(*touch.pos):
+                self._on_open(self._display_name, self._short_hash)
+                return True
+        return super().on_touch_up(touch)
+
 
 class StreamScreen(BoxLayout):
-    name = "stream"
+    name = "talk"
 
     def __init__(self, app, **kwargs):
         super().__init__(orientation="vertical", padding=dp(SCREEN_PADDING),
@@ -143,7 +125,7 @@ class StreamScreen(BoxLayout):
         self._app = app
         self._rows = {}
 
-        self.add_widget(SectionHeading("[font=emoji]📡[/font]  Nearby Gateways"))
+        self.add_widget(SectionHeading("[font=emoji]💬[/font]  Nearby devices"))
 
         self._chip = StatusChip()
         self.add_widget(self._chip)
@@ -156,7 +138,7 @@ class StreamScreen(BoxLayout):
 
         self._empty = EmptyState(
             icon="📡",
-            message="No announces heard yet.\nCheck your radio connection.",
+            message="No devices heard yet.\nTap Connect, then check your radio.",
         )
         self._list.add_widget(self._empty)
 
@@ -172,7 +154,7 @@ class StreamScreen(BoxLayout):
             display_name=display_name,
             short_hash=short_hash,
             time_ago=time_ago,
-            on_set_gateway=self._app.set_gateway,
+            on_open=self._app.open_chat,
         )
         self._list.add_widget(row)
         self._rows[short_hash] = row

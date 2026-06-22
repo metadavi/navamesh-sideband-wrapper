@@ -134,9 +134,12 @@ class BigButton(Button):
             self.text = f"[font=emoji]{icon}[/font]  {label}"
         else:
             self.text = label
-        self.font_size = sp(theme.FONT_BODY)
+        # Command tiles are compact (≥48dp touch target) to leave the reply area
+        # the focus of the screen; the single primary CTA stays full height.
+        self.font_size = sp(theme.FONT_LABEL if variant == "command" else theme.FONT_BODY)
         self.size_hint_y = None
-        self.height = dp(theme.BUTTON_HEIGHT)
+        self.height = dp(theme.COMMAND_TILE_HEIGHT if variant == "command"
+                         else theme.BUTTON_HEIGHT)
         self.bold = True
         self.halign = "center"
         self.valign = "middle"
@@ -193,7 +196,8 @@ class ResultCard(BoxLayout):
     """Display a gateway reply as a readable parchment card with optional image."""
 
     def __init__(self, text: str = "", image_bytes: bytes | None = None,
-                 use_markup: bool = False, image_ext: str = "png", **kwargs):
+                 use_markup: bool = False, image_ext: str = "png",
+                 mono: bool = False, **kwargs):
         super().__init__(orientation="vertical", **kwargs)
         self._image_ext = image_ext or "png"
         self.size_hint_y = None
@@ -209,15 +213,22 @@ class ResultCard(BoxLayout):
             self._border = Line(width=dp(theme.HAIRLINE_WIDTH),
                                 rounded_rectangle=self._rounded_args())
         self.bind(pos=self._update_rect, size=self._update_rect)
+        # Gateway replies are monospace-formatted (space-aligned columns + ─── rule
+        # lines): render them in the mono family so the columns stay aligned and the
+        # box-drawing glyphs render (instead of falling back to .notdef boxes). Prose
+        # cards (onboarding) keep the friendly body font.
+        _font_kw = _mono() if mono else _body()
         self._label = Label(
             text=text,
             markup=use_markup,
-            font_size=sp(theme.FONT_BODY),
+            # Mono replies use a smaller size so the gateway's terminal-width
+            # tables (and ─── rule lines) fit on one line instead of wrapping.
+            font_size=sp(theme.FONT_REPLY if mono else theme.FONT_BODY),
             color=get_color_from_hex(theme.COLOR_ON_CARD),
             halign="left",
             valign="top",
             size_hint_y=None,
-            **_body(),
+            **_font_kw,
         )
         # Wrap text to the card width so long replies / the onboarding copy
         # don't overflow (and clip) horizontally.
@@ -244,16 +255,69 @@ class ResultCard(BoxLayout):
                 # Fall back to letting the provider sniff the format (gateway map
                 # replies are JPEG under the 'halow' profile, not PNG).
                 core_img = CoreImage(io.BytesIO(image_bytes), ext="png")
-            if core_img.texture:
-                self._img_height = dp(theme.IMAGE_PREVIEW_HEIGHT)
-                self.add_widget(Image(
-                    texture=core_img.texture,
-                    size_hint=(1, None),
-                    height=self._img_height,
-                ))
+            if not core_img.texture:
+                return
+            tex = core_img.texture
+            tw, th = tex.size
+            aspect = (th / tw) if tw else 1.0  # height / width
+            # Fill the full card width and scale height to preserve aspect ratio,
+            # so the map is as large as the reply column allows (no fixed-height
+            # squish, no downscaling below the available width). Cap portrait
+            # images so they don't run off-screen; the ScrollView handles overflow.
+            img = Image(
+                texture=tex,
+                size_hint=(1, None),
+                fit_mode="contain",
+            )
+            self._image_aspect = aspect
+            self._image_widget = img
+
+            def _resize(_inst, w):
+                h = min(w * self._image_aspect, w * 1.4)
+                img.height = h
+                self._img_height = h
                 self._update_height()
+
+            img.bind(width=_resize)
+            _resize(img, img.width)
+            # Tap (not drag) the inline map to open it full-screen for close
+            # reading. We do NOT consume on_touch_down — that would swallow the
+            # ScrollView's drag gesture when it starts on the map. Instead we
+            # remember the press (keyed on the down-collision, which is reliable)
+            # and open only on a touch-up that barely moved. Tap-vs-scroll is
+            # measured in window coords (touch.x/y) — stable across down/up —
+            # because collide_point() in on_touch_up is unreliable inside the
+            # ScrollView's transformed coordinate space.
+            img.bind(on_touch_down=self._on_image_down,
+                     on_touch_up=self._on_image_up)
+            self.add_widget(img)
+            self._update_height()
         except Exception:
             pass
+
+    def _on_image_down(self, img, touch):
+        if img.collide_point(*touch.pos) and getattr(img, "texture", None):
+            touch.ud["_map_press"] = (touch.x, touch.y)
+        return False  # let the ScrollView handle scrolling
+
+    def _on_image_up(self, img, touch):
+        origin = touch.ud.pop("_map_press", None)
+        if origin is None:
+            return False
+        if (abs(touch.x - origin[0]) > dp(theme.SPACE_MD) or
+                abs(touch.y - origin[1]) > dp(theme.SPACE_MD)):
+            return False  # it was a scroll drag, not a tap
+        from kivy.uix.modalview import ModalView
+        from kivy.uix.image import Image
+        modal = ModalView(size_hint=(1, 1), background_color=(0, 0, 0, 0.92),
+                          auto_dismiss=True)
+        full = Image(texture=img.texture, fit_mode="contain")
+        # The image fills the whole modal, so there is no "outside" for
+        # auto_dismiss to catch — dismiss on a tap on the image itself.
+        full.bind(on_touch_down=lambda *_: (modal.dismiss(), True)[1])
+        modal.add_widget(full)
+        modal.open()
+        return True
 
     def _update_rect(self, *_):
         self._rect.pos  = self.pos
@@ -270,25 +334,42 @@ class ResultCard(BoxLayout):
 
 
 class StatusChip(Label):
-    """Small connectivity status indicator with three states.
+    """Small mesh-connectivity status indicator with four states.
 
     Triple-coded: a colored status dot (color channel) + a plain word (always in
     legible Umber ink, so the message reads regardless of the hue). The dot uses
-    Sage (connected), Sandstone Gold (connecting) or Mesa Red (no service).
+    Sage (mesh active), Sandstone Gold (listening / quiet) or Mesa Red (service
+    offline).
 
-    States reflect the *backend service* status, not the HaLow hardware:
-      - "connected"  : the Sideband service is alive (fresh heartbeat).
-      - "connecting" : the service was launched and we're waiting for it.
-      - "no_service" : the service is not running / failed to launch.
+    The wording reflects *observed mesh traffic*, never a hardware link claim we
+    cannot verify (the HT-HD01 is a config-defined UDP interface that exposes no
+    clean link signal across the UI↔service process boundary). The states:
+      - "connected" → "Mesh active"      : an announce was heard over the radio
+                                            within the freshness window — proof the
+                                            device is receiving live mesh traffic.
+      - "connecting" → "Listening for mesh…" : the service is alive but no announce
+                                            has been heard yet this session.
+      - "mesh_quiet" → "Mesh quiet"      : the service is alive and announces were
+                                            heard before, but none recently (the
+                                            mesh went quiet or the link dropped).
+      - "no_service" → "Service offline" : the background service isn't running.
 
-    The negative copy deliberately gives a recovery hint (restart the app) rather
-    than blaming the Heltec "white box", since a missing heartbeat is a service/UI
-    condition — the radio itself may be perfectly fine.
+    The "Service offline" copy gives a recovery hint (restart the app) since a
+    missing heartbeat is a service/UI condition, not necessarily a radio fault.
+    "Radio Connected" is intentionally never shown — we can only prove traffic,
+    not a link.
     """
 
     CONNECTED  = "connected"
     CONNECTING = "connecting"
+    MESH_QUIET = "mesh_quiet"
     NO_SERVICE = "no_service"
+
+    # Status-dot glyph. The bundled text fonts have no glyph for ● (U+25CF) — it
+    # rendered as a □ box — and EmojiScaled draws the 🟢/🟡/🔴 circles monochrome
+    # (losing the state hue). The bullet • (U+2022) *is* in the body font, so a
+    # [color]-markup bullet renders as a crisp colored dot that carries the hue.
+    DOT_GLYPH = "•"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -307,30 +388,77 @@ class StatusChip(Label):
     def status_text(cls, state: str, detail: str = "") -> str:
         """Pure text mapping for a state (no widget needed — unit-testable)."""
         if state == cls.CONNECTED:
-            return f"Radio connected  {detail}".strip()
+            return f"Mesh active  {detail}".strip()
         if state == cls.CONNECTING:
-            return f"Connecting to radio…  {detail}".strip()
-        return "Radio service not running — try restarting the app"
+            return f"Listening for mesh…  {detail}".strip()
+        if state == cls.MESH_QUIET:
+            return f"Mesh quiet  {detail}".strip()
+        return "Service offline — try restarting the app"
 
     @classmethod
     def status_color(cls, state: str) -> str:
         if state == cls.CONNECTED:
             return theme.COLOR_CONNECTED
-        if state == cls.CONNECTING:
+        if state in (cls.CONNECTING, cls.MESH_QUIET):
             return theme.COLOR_PENDING
         return theme.COLOR_DISCONNECTED
 
     def set_state(self, state: str, detail: str = ""):
         dot = self.status_color(state).lstrip("#")
         word = self.status_text(state, detail)
-        self.text = f"[color={dot}]●[/color]  {word}"
+        self.text = f"[color={dot}]{self.DOT_GLYPH}[/color]  {word}"
         # The word stays Umber so it is always legible on the parchment canvas;
-        # the colored dot carries the state hue.
+        # the colored bullet carries the state hue.
         self.color = get_color_from_hex(theme.COLOR_ON_SURFACE)
 
     def set_connected(self, is_connected: bool, detail: str = ""):
         """Backward-compatible boolean entry point (True→connected, False→no_service)."""
         self.set_state(self.CONNECTED if is_connected else self.NO_SERVICE, detail)
+
+
+class BackBar(BoxLayout):
+    """A compact top bar for pushed chat screens: a '‹ Back' button + a title.
+
+    Used by the gateway command screen and the peer messenger so a tapped device
+    chat can return to the Talk tab. The back control is a flat, full-height
+    touch target (≥48dp) with Umber ink on the parchment canvas.
+    """
+
+    def __init__(self, title: str = "", on_back=None, **kwargs):
+        kwargs.setdefault("orientation", "horizontal")
+        kwargs.setdefault("size_hint_y", None)
+        kwargs.setdefault("height", dp(theme.TOUCH_TARGET))
+        kwargs.setdefault("spacing", dp(theme.SPACE_SM))
+        super().__init__(**kwargs)
+        btn = Button(
+            text="‹ Back",
+            font_size=sp(theme.FONT_LABEL),
+            bold=True,
+            size_hint_x=None, width=dp(96),
+            halign="center", valign="middle",
+            background_normal="", background_down="",
+            background_color=(0, 0, 0, 0),
+            color=get_color_from_hex(theme.COLOR_ON_SURFACE),
+        )
+        for k, v in _body().items():
+            setattr(btn, k, v)
+        if on_back is not None:
+            btn.bind(on_press=lambda *_: on_back())
+        self.add_widget(btn)
+        self._title = Label(
+            text=title,
+            markup=True,
+            font_size=sp(theme.FONT_LABEL),
+            color=get_color_from_hex(theme.COLOR_MUTED),
+            halign="left", valign="middle",
+        )
+        self._title.bind(size=lambda i, _s: setattr(i, "text_size", i.size))
+        for k, v in _body().items():
+            setattr(self._title, k, v)
+        self.add_widget(self._title)
+
+    def set_title(self, title: str):
+        self._title.text = title
 
 
 class BrandMark(Widget):

@@ -87,18 +87,55 @@ def test_contrast_helper_known_value():
     assert abs(ratio - 21.0) < 0.01, f"Expected ~21.0, got {ratio}"
 
 
-def test_announce_list_adapter_highlight():
-    """Announce stream: 'Navamesh Gateway' should be flagged as a gateway."""
-    from sbapp.farmui.screens.stream import _is_gateway, GATEWAY_DISPLAY_NAME
-    assert _is_gateway(GATEWAY_DISPLAY_NAME) is True
-    assert _is_gateway("Some other device") is False
-    assert _is_gateway("") is False
+def test_is_gateway_device_substring():
+    """Device detection: any name containing 'gateway' (case-insensitive) is a
+    gateway; everything else is a peer. The dest_hex arg is accepted (reserved
+    for a future identity-based rule) without changing the result today."""
+    from sbapp.farmui.devices import is_gateway_device, GATEWAY_DISPLAY_NAME
+    assert is_gateway_device(GATEWAY_DISPLAY_NAME) is True
+    assert is_gateway_device("East Gateway") is True
+    assert is_gateway_device("GATEWAY") is True
+    # Substring rule (intentionally looser than the old exact match):
+    assert is_gateway_device("Navamesh Gateway extra") is True
+    assert is_gateway_device("Navamesh Gateway", dest_hex="abc123") is True
+    # Peers / non-gateways:
+    assert is_gateway_device("My Sideband") is False
+    assert is_gateway_device("Phone B") is False
+    assert is_gateway_device("") is False
+    assert is_gateway_device(None) is False
 
 
-def test_announce_list_adapter_non_gateway():
-    from sbapp.farmui.screens.stream import _is_gateway
-    assert _is_gateway("My Sideband") is False
-    assert _is_gateway("Navamesh Gateway extra") is False
+def test_stream_reexports_gateway_helper():
+    """The Talk screen re-exports the canonical helper for back-compat."""
+    from sbapp.farmui.screens.stream import is_gateway_device as via_stream
+    from sbapp.farmui.devices import is_gateway_device as canonical
+    assert via_stream is canonical
+
+
+def test_large_text_setting_removed():
+    """The Large Text preference is gone from settings (UI + scaling removed)."""
+    from sbapp.farmui.settings import FarmSettings, _DEFAULT
+    assert "large_text" not in _DEFAULT
+    assert not hasattr(FarmSettings, "large_text")
+
+
+def test_no_large_text_references_in_farmui():
+    """No stray large-text scaling/handlers remain anywhere in farmui."""
+    import os
+    import sbapp.farmui as farmui_pkg
+    root = os.path.dirname(farmui_pkg.__file__)
+    hits = []
+    for dirpath, _dirs, files in os.walk(root):
+        if "__pycache__" in dirpath:
+            continue
+        for fn in files:
+            if not fn.endswith(".py"):
+                continue
+            path = os.path.join(dirpath, fn)
+            with open(path, encoding="utf-8") as f:
+                if "large_text" in f.read():
+                    hits.append(os.path.relpath(path, root))
+    assert not hits, f"large_text still referenced in: {hits}"
 
 
 def test_bigbutton_min_height():
@@ -106,3 +143,33 @@ def test_bigbutton_min_height():
     from kivy.metrics import dp
     from sbapp.farmui import theme
     assert theme.BUTTON_HEIGHT >= 96
+
+
+def test_command_tile_min_height():
+    """Compact command tiles stay tappable: >= the 48dp touch-target minimum."""
+    from sbapp.farmui import theme
+    assert theme.COMMAND_TILE_HEIGHT >= theme.TOUCH_TARGET
+    # ...and genuinely smaller than the primary CTA, so the grid is compacted.
+    assert theme.COMMAND_TILE_HEIGHT < theme.BUTTON_HEIGHT
+
+
+def test_reply_font_smaller_than_body():
+    """Mono replies use a smaller size so terminal-width tables don't wrap."""
+    from sbapp.farmui import theme
+    assert theme.FONT_REPLY < theme.FONT_BODY
+
+
+def test_status_chip_dot_uses_renderable_glyph():
+    """The status dot must use a glyph the bundled font actually has.
+
+    ● (U+25CF) is absent from the bundled text fonts (rendered as a □ box); the
+    bullet • (U+2022) is present, so a [color]-markup bullet gives a crisp
+    colored dot. Guard against regressing to the bare ●.
+    """
+    from sbapp.farmui.widgets import StatusChip
+    assert StatusChip.DOT_GLYPH == "•"
+    import inspect
+    from sbapp.farmui import widgets
+    src = inspect.getsource(widgets.StatusChip.set_state)
+    assert "●" not in src, "bare ● (U+25CF) has no glyph and renders as a box"
+    assert "[color=" in src, "the dot must carry the state hue via color markup"

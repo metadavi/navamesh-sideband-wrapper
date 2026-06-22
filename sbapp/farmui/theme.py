@@ -62,6 +62,8 @@ FONT_LABEL    = 16
 FONT_HEADING  = 24
 FONT_TITLE    = 32
 FONT_ADDRESS  = 14   # monospace, LXMF address
+FONT_REPLY    = 13   # monospace gateway replies — small enough that the
+                     # gateway's terminal-width tables fit without wrapping
 FONT_CAPTION  = 14   # secondary metadata (hash · time, hints)
 FONT_ICON     = 48   # large decorative emoji (empty states)
 
@@ -98,6 +100,7 @@ SPACE_XL = 24
 
 # ── Sizes (dp) ───────────────────────────────────────────────────────────────
 BUTTON_HEIGHT        = 96
+COMMAND_TILE_HEIGHT  = 64   # compact command-grid tile (≥ TOUCH_TARGET)
 TOUCH_TARGET         = 48
 CARD_PADDING         = 14
 CARD_RADIUS          = 14   # Field Log card radius

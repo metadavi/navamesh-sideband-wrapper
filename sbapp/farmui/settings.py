@@ -14,7 +14,6 @@ _DEFAULT = {
     "gateway_hash":         None,
     "gateway_display_name": None,
     "node_cache":           [],
-    "large_text":           False,
     "dev_mode":             False,
 }
 
@@ -73,15 +72,6 @@ class FarmSettings:
     def clear_gateway(self):
         self._data["gateway_hash"]         = None
         self._data["gateway_display_name"] = None
-        self._save()
-
-    @property
-    def large_text(self) -> bool:
-        return bool(self._data.get("large_text", False))
-
-    @large_text.setter
-    def large_text(self, value: bool):
-        self._data["large_text"] = bool(value)
         self._save()
 
     @property

@@ -31,13 +31,16 @@ class FakeCore:
         return self._service_log
 
 
-def _app(core=None, *, launch_error=None, started_at=None):
+def _app(core=None, *, launch_error=None, started_at=None, latest_announce=None):
     from sbapp.farmui.app import FarmApp
     app = FarmApp.__new__(FarmApp)
     app.sideband = core
     app._dispatcher = None
     app._service_launch_error = launch_error
     app._service_started_at = started_at
+    app._heard_any_announce = False
+    # Connectivity now requires a recently *heard* announce to read "Mesh active".
+    app._latest_announce_epoch = lambda: latest_announce
     return app
 
 
@@ -62,12 +65,22 @@ def test_chip_three_states_distinct():
 
 # ── Connectivity state machine ───────────────────────────────────────────────
 
-def test_state_connected_on_fresh_heartbeat(monkeypatch):
+def test_state_mesh_active_on_fresh_heartbeat_and_recent_announce(monkeypatch):
     import RNS, time
     from sbapp.farmui.widgets import StatusChip
     monkeypatch.setattr(RNS.vendor.platformutils, "is_android", lambda: True)
-    app = _app(FakeCore({"service.heartbeat": time.time()}))
+    app = _app(FakeCore({"service.heartbeat": time.time()}),
+               latest_announce=time.time())
     assert app._connectivity_state() == StatusChip.CONNECTED
+
+
+def test_state_listening_on_fresh_heartbeat_without_announce(monkeypatch):
+    """The old false positive: a fresh heartbeat alone must NOT read connected."""
+    import RNS, time
+    from sbapp.farmui.widgets import StatusChip
+    monkeypatch.setattr(RNS.vendor.platformutils, "is_android", lambda: True)
+    app = _app(FakeCore({"service.heartbeat": time.time()}))  # no announce
+    assert app._connectivity_state() == StatusChip.CONNECTING
 
 
 def test_state_connecting_within_grace(monkeypatch):

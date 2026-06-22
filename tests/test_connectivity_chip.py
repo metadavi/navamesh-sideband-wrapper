@@ -166,3 +166,112 @@ def test_radio_is_up_never_raises(monkeypatch):
 def test_radio_is_up_with_no_core():
     app = _make_app(None)
     assert app._radio_is_up() is False
+
+
+# ── Four-state mesh status (announce-traffic signal) ─────────────────────────
+#
+# "Connected" no longer means just "service alive" (the old false positive).
+# It now requires an announce *heard over the radio* within RADIO_LIVE_WINDOW,
+# read from the shared announce DB. The four states:
+#   CONNECTED  ("Mesh active")        — alive + recent announce
+#   MESH_QUIET ("Mesh quiet")         — alive + announce heard before, now stale
+#   CONNECTING ("Listening for mesh…")— alive + no announce heard yet
+#   NO_SERVICE ("Service offline")    — service not running
+
+def _state_app(latest_epoch, force_android, *, started_ago=None, launch_error=None,
+               core_state=None):
+    """A FarmApp set up enough to exercise _connectivity_state() in headless tests."""
+    from sbapp.farmui.app import FarmApp
+    app = _make_app(FakeCore(core_state or {"service.heartbeat": time.time()}))
+    app._service_launch_error = launch_error
+    app._service_started_at = (time.time() - started_ago) if started_ago is not None else None
+    app._heard_any_announce = False
+    # Control the "most recent heard announce" timestamp directly (the real impl
+    # reads max(received) from the announce DB; tested separately below).
+    app._latest_announce_epoch = lambda: latest_epoch
+    return app
+
+
+def test_state_mesh_active_on_recent_announce(force_android):
+    from sbapp.farmui.widgets import StatusChip
+    app = _state_app(time.time(), force_android)
+    assert app._connectivity_state() == StatusChip.CONNECTED
+    assert StatusChip.status_text(StatusChip.CONNECTED).startswith("Mesh active")
+
+
+def test_state_mesh_quiet_when_announce_stale(force_android):
+    from sbapp.farmui.app import FarmApp
+    from sbapp.farmui.widgets import StatusChip
+    stale = time.time() - (FarmApp.RADIO_LIVE_WINDOW + 30.0)
+    app = _state_app(stale, force_android)
+    assert app._connectivity_state() == StatusChip.MESH_QUIET
+
+
+def test_state_listening_when_no_announce_yet(force_android):
+    from sbapp.farmui.widgets import StatusChip
+    app = _state_app(None, force_android)
+    assert app._connectivity_state() == StatusChip.CONNECTING
+
+
+def test_state_service_offline_when_heartbeat_stale(force_android):
+    """Fresh-service-but-no-link can't read green; a dead service reads offline."""
+    from sbapp.farmui.app import FarmApp
+    from sbapp.farmui.widgets import StatusChip
+    stale_hb = time.time() - (FarmApp.HEARTBEAT_MAX_AGE + 5.0)
+    app = _state_app(time.time(), force_android,
+                     started_ago=FarmApp.CONNECT_GRACE + 10.0,
+                     core_state={"service.heartbeat": stale_hb})
+    assert app._connectivity_state() == StatusChip.NO_SERVICE
+
+
+def test_fresh_heartbeat_alone_is_not_connected(force_android):
+    """The old false positive: service alive but no traffic must NOT read green."""
+    from sbapp.farmui.widgets import StatusChip
+    app = _state_app(None, force_android)  # heartbeat fresh, zero announces
+    assert app._radio_is_up() is True
+    assert app._connectivity_state() != StatusChip.CONNECTED
+
+
+def test_chip_never_claims_radio_connected():
+    """Wording guard: no state may render the banned phrase 'Radio Connected'."""
+    from sbapp.farmui.widgets import StatusChip
+    for state in (StatusChip.CONNECTED, StatusChip.CONNECTING,
+                  StatusChip.MESH_QUIET, StatusChip.NO_SERVICE):
+        assert "radio connected" not in StatusChip.status_text(state).lower()
+
+
+def test_latest_announce_epoch_reads_db_readonly(tmp_path):
+    """_latest_announce_epoch() returns max(received) from the announce table."""
+    import sqlite3
+    db = tmp_path / "sideband.db"
+    con = sqlite3.connect(str(db))
+    con.execute("create table announce (id integer primary key, received real)")
+    con.executemany("insert into announce (received) values (?)",
+                    [(100.0,), (250.5,), (175.0,)])
+    con.commit()
+    con.close()
+
+    class DBCore:
+        db_path = str(db)
+    app = _make_app(DBCore())
+    assert app._latest_announce_epoch() == 250.5
+
+
+def test_latest_announce_epoch_none_when_no_db():
+    """No db_path → None (treated as 'no traffic heard'), never raises."""
+    app = _make_app(type("C", (), {"db_path": None})())
+    assert app._latest_announce_epoch() is None
+
+
+def test_latest_announce_epoch_none_when_empty(tmp_path):
+    import sqlite3
+    db = tmp_path / "empty.db"
+    con = sqlite3.connect(str(db))
+    con.execute("create table announce (id integer primary key, received real)")
+    con.commit()
+    con.close()
+
+    class DBCore:
+        db_path = str(db)
+    app = _make_app(DBCore())
+    assert app._latest_announce_epoch() is None

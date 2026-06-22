@@ -24,6 +24,7 @@ from kivy.app import App
 from kivy.core.window import Window
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.tabbedpanel import TabbedPanel, TabbedPanelHeader
+from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.uix.label import Label
 from kivy.metrics import dp, sp
 from kivy.utils import get_color_from_hex
@@ -32,7 +33,9 @@ from kivy.clock import Clock
 from .screens.announce import AnnounceScreen
 from .screens.stream import StreamScreen
 from .screens.conversation import ConversationScreen
+from .screens.peer_chat import PeerChatScreen
 from .command_registry import COMMANDS, get_wire
+from .devices import is_gateway_device
 from .widgets import StatusChip
 from . import theme
 
@@ -55,8 +58,15 @@ class FarmApp(App):
         self._gateway_hash = None
         self._gateway_name = "(none)"
         self._node_cache: list[str] = []
-        # Hashes of gateway replies already shown in the Commands tab.
+        # Hashes of gateway replies already shown in the gateway command screen.
         self._shown_msgs: set[str] = set()
+        # Active peer conversation (Talk → tap a non-gateway device) + its
+        # already-rendered message hashes (reset each time a peer is opened).
+        self._active_peer_hash: str | None = None
+        self._shown_peer_msgs: set[str] = set()
+        # True once we have ever read an announce row this session — lets the
+        # status chip tell "listening (none yet)" from "mesh quiet (gone stale)".
+        self._heard_any_announce = False
         # Backend-service launch tracking (Android). Set by _start_service().
         self._service_launch_error: str | None = None
         self._service_started_at: float | None = None
@@ -69,11 +79,6 @@ class FarmApp(App):
         # Developer mode: shows the optional Debug diagnostics tab. Off for farmers.
         # Enabled by the NAVAMESH_DEV env var (dev builds) or the dev_mode setting.
         self._dev_mode = bool(os.environ.get("NAVAMESH_DEV")) or self._settings.dev_mode
-        if self._settings.large_text:
-            theme.FONT_BODY     = int(theme.FONT_BODY * 1.35)
-            theme.FONT_LABEL    = int(theme.FONT_LABEL * 1.35)
-            theme.FONT_HEADING  = int(theme.FONT_HEADING * 1.35)
-            theme.BUTTON_HEIGHT = int(theme.BUTTON_HEIGHT * 1.2)
 
         # Register emoji font. EmojiScaled.ttf is bundled by upstream Sideband and
         # is a standard TrueType that SDL2_ttf/FreeType can load on Android.
@@ -119,20 +124,26 @@ class FarmApp(App):
         root = BoxLayout(orientation="vertical")
         root.add_widget(self._build_topbar())
 
+        # ── Navigation: a ScreenManager wraps the two-tab home and the pushed
+        # chat screens. Tapping a device in Talk opens the right chat screen
+        # (gateway dashboard or peer messenger); each has a Back control. ───────
         tabs = TabbedPanel(do_default_tab=False, size_hint=(1, 1),
                            tab_height=dp(theme.TAB_HEIGHT))
         # Content frame behind the screens reads as parchment, not Kivy gray.
         tabs.background_color = get_color_from_hex(theme.COLOR_BG)
+        self._home_tabs = tabs
 
         self._ann_screen  = AnnounceScreen(app=self)
         self._str_screen  = StreamScreen(app=self)
         self._conv_screen = ConversationScreen(app=self)
+        self._peer_screen = PeerChatScreen(app=self)
 
-        # Paint the parchment content surface behind each screen. TabbedPanel
-        # draws its own dark content background that tabs.background_color does
-        # not fully override, so we fill the screens directly (Field Parchment).
+        # Paint the parchment content surface behind each screen. TabbedPanel /
+        # ScreenManager draw their own dark content background that
+        # background_color does not fully override, so we fill screens directly.
         from .widgets import paint_background
-        for _scr in (self._ann_screen, self._str_screen, self._conv_screen):
+        for _scr in (self._ann_screen, self._str_screen,
+                     self._conv_screen, self._peer_screen):
             paint_background(_scr, theme.COLOR_BG)
 
         # Restore the previously-pinned farm gateway (if any) so the selection
@@ -140,11 +151,10 @@ class FarmApp(App):
         # updates. Read from farmui's own settings; no backend state involved.
         self._restore_gateway()
 
-        # The three core farmer tabs are always present.
+        # Exactly two farmer tabs: Connect (announce) and Talk (devices).
         tab_specs = [
-            (self._ann_screen,  "Announce",     "📢"),
-            (self._str_screen,  "Stream",       "📡"),
-            (self._conv_screen, "Commands",     "💬"),
+            (self._ann_screen,  "Connect",  "📡"),
+            (self._str_screen,  "Talk",     "💬"),
         ]
         # Optional dev-only diagnostics tab (hidden from farmers; see dev_diagnostics).
         if self._dev_mode:
@@ -156,6 +166,7 @@ class FarmApp(App):
         tabs.tab_width = Window.width / n_tabs
         Window.bind(width=lambda _, w: setattr(tabs, "tab_width", w / n_tabs))
 
+        self._talk_tab = None
         for screen, label, icon in tab_specs:
             tab = TabbedPanelHeader(
                 text=f"[font=emoji]{icon}[/font]\n{label}",
@@ -164,8 +175,20 @@ class FarmApp(App):
             self._style_tab_header(tab)
             tab.content = screen
             tabs.add_widget(tab)
+            if label == "Talk":
+                self._talk_tab = tab
 
-        root.add_widget(tabs)
+        self._sm = ScreenManager()
+        home = Screen(name="home")
+        home.add_widget(tabs)
+        gw_screen = Screen(name="gateway_chat")
+        gw_screen.add_widget(self._conv_screen)
+        peer_screen = Screen(name="peer_chat")
+        peer_screen.add_widget(self._peer_screen)
+        for s in (home, gw_screen, peer_screen):
+            self._sm.add_widget(s)
+
+        root.add_widget(self._sm)
         return root
 
     def _build_topbar(self):
@@ -406,6 +429,13 @@ class FarmApp(App):
     # treated as "not running" (the service takes a few seconds to boot RNS).
     CONNECT_GRACE = 20.0
 
+    # How recently an announce must have been *heard over the radio* for the chip
+    # to read "Mesh active". The Pi/gateway announces roughly every 3 minutes, so
+    # 5 min tolerates one missed announce without flapping. A heard announce is
+    # direct proof the device is receiving live mesh traffic — far stronger than
+    # the service heartbeat (which only proves the background process is alive).
+    RADIO_LIVE_WINDOW = 300.0
+
     def _radio_is_up(self) -> bool:
         """Real, read-only connectivity signal for the status chip.
 
@@ -439,16 +469,68 @@ class FarmApp(App):
         except Exception:
             return False
 
-    def _connectivity_state(self) -> str:
-        """Three-state status for the chip: connected / connecting / no_service.
+    def _latest_announce_epoch(self):
+        """Epoch (float) of the most recently *received* announce, or None.
 
-        The negative state is 'no_service' (a backend condition), never a claim
-        that the HaLow radio itself is broken.
+        Reads the shared Sideband announce table read-only with a single
+        max(received) query — cheap (no LXMF decode, unlike list_announces_safe).
+        Announces only arrive over the radio, so this is direct evidence of live
+        mesh RX.
+        """
+        if not self.sideband:
+            return None
+        db_path = getattr(self.sideband, "db_path", None)
+        if not db_path or not os.path.isfile(db_path):
+            return None
+        try:
+            import sqlite3
+            con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+            try:
+                row = con.execute("select max(received) from announce").fetchone()
+            finally:
+                con.close()
+        except Exception:
+            return None
+        if not row or row[0] is None:
+            return None
+        try:
+            return float(row[0])
+        except Exception:
+            return None
+
+    def _radio_traffic_fresh(self) -> bool:
+        """True if an announce was heard within RADIO_LIVE_WINDOW.
+
+        Side effect: records that we have *ever* heard an announce this session
+        (even a stale one), so the chip can distinguish "listening, none yet"
+        from "mesh quiet (heard before, now gone)".
+        """
+        epoch = self._latest_announce_epoch()
+        if epoch is None:
+            return False
+        self._heard_any_announce = True
+        return (self._now() - epoch) < self.RADIO_LIVE_WINDOW
+
+    def _connectivity_state(self) -> str:
+        """Four-state mesh status for the chip.
+
+        Layered, honest signals (the backend is byte-locked, so we only read):
+          - no_service : the background service isn't running / failed to launch.
+          - connected  ("Mesh active")       : the service is alive AND an announce
+            was heard over the radio within RADIO_LIVE_WINDOW (proof of live RX).
+          - mesh_quiet ("Mesh quiet")         : service alive, announces were heard
+            before but none recently (mesh went quiet / link likely dropped).
+          - connecting ("Listening for mesh…"): service alive, none heard yet.
+        We never claim "Radio Connected" — we can prove traffic, not a link.
         """
         if self.sideband is None:
             return StatusChip.NO_SERVICE
         if self._radio_is_up():
-            return StatusChip.CONNECTED
+            if self._radio_traffic_fresh():
+                return StatusChip.CONNECTED
+            if self._heard_any_announce:
+                return StatusChip.MESH_QUIET
+            return StatusChip.CONNECTING
         if self._service_launch_error is not None:
             return StatusChip.NO_SERVICE
         # No heartbeat yet: still connecting if we're within the grace window
@@ -464,13 +546,15 @@ class FarmApp(App):
         """Lightweight poll of core state — mirrors main_upstream.py getstate pattern."""
         try:
             state = self._connectivity_state()
-            for screen in (self._ann_screen, self._str_screen, self._conv_screen):
+            for screen in (self._ann_screen, self._str_screen,
+                           self._conv_screen, self._peer_screen):
                 if hasattr(screen, "set_state"):
                     screen.set_state(state)
             if hasattr(self, "_dbg_screen") and hasattr(self._dbg_screen, "refresh"):
                 self._dbg_screen.refresh()
             self._refresh_announces()
             self._poll_gateway_replies()
+            self._poll_peer_messages()
         except Exception:
             pass
 
@@ -513,6 +597,37 @@ class FarmApp(App):
                     image_ext = (t.decode() if isinstance(t, (bytes, bytearray)) else str(t)) or "png"
                     image_bytes = data
                 self._conv_screen.add_result(text, image_bytes=image_bytes, image_ext=image_ext)
+            except Exception:
+                continue
+
+    def _poll_peer_messages(self):
+        """Render the active peer conversation (both directions) in the messenger.
+
+        list_messages() is client-safe and returns oldest→newest; we dedupe by
+        message hash so polling re-adds nothing. A message whose source is the
+        peer is inbound; anything else (our own address) is outbound."""
+        if not self.sideband or not self._active_peer_hash:
+            return
+        try:
+            peer = bytes.fromhex(self._active_peer_hash)
+        except Exception:
+            return
+        try:
+            msgs = self.sideband.list_messages(peer, limit=50)
+        except Exception:
+            return
+        for m in msgs or []:
+            try:
+                h = m.get("hash")
+                key = h.hex() if isinstance(h, (bytes, bytearray)) else str(h)
+                if key in self._shown_peer_msgs:
+                    continue
+                self._shown_peer_msgs.add(key)
+                content = m.get("content")
+                text = (content.decode("utf-8", "replace")
+                        if isinstance(content, (bytes, bytearray)) else (content or ""))
+                outbound = m.get("source") != peer
+                self._peer_screen.add_message(text, outbound)
             except Exception:
                 continue
 
@@ -665,6 +780,68 @@ class FarmApp(App):
             self._settings.set_gateway(display_name, short_hash)
         except Exception:
             pass
+
+    # ── Navigation / device routing (called by the Talk tab) ───────────────────
+
+    def open_chat(self, display_name: str, dest_hex: str):
+        """Route a tapped device to the right chat.
+
+        Gateways open the predefined command dashboard (and pin the gateway);
+        regular peers open a normal free-text messenger. The gateway-vs-peer
+        decision lives here (via is_gateway_device), never in the Talk list.
+        """
+        is_gw = is_gateway_device(display_name, dest_hex)
+        try:
+            import RNS
+            RNS.log(
+                f"Navamesh: open_chat name={display_name!r} dest={dest_hex} "
+                f"gateway={is_gw} -> {'gateway_chat' if is_gw else 'peer_chat'}",
+                RNS.LOG_NOTICE,
+            )
+        except Exception:
+            pass
+        if is_gw:
+            self._active_peer_hash = None
+            self.set_gateway(display_name, dest_hex)
+            self._conv_screen.reset_replies()
+            self._goto_screen("gateway_chat")
+        else:
+            self.open_peer(display_name, dest_hex)
+
+    def open_peer(self, display_name: str, dest_hex: str):
+        """Open the free-text messenger for a peer and load its history."""
+        self._active_peer_hash = dest_hex
+        self._shown_peer_msgs = set()
+        self._peer_screen.open_peer(display_name, dest_hex)
+        self._goto_screen("peer_chat")
+        # Fill history immediately rather than waiting for the next 2s poll.
+        self._poll_peer_messages()
+
+    def go_home(self):
+        """Return from a chat screen to the two-tab home (Talk selected)."""
+        self._active_peer_hash = None
+        self._goto_screen("home")
+        try:
+            if self._talk_tab is not None:
+                self._home_tabs.switch_to(self._talk_tab)
+        except Exception:
+            pass
+
+    def _goto_screen(self, name: str):
+        sm = getattr(self, "_sm", None)
+        if sm is not None:
+            sm.current = name
+
+    def send_peer_text(self, dest_hex: str, content: str):
+        """Send a free-text LXMF message to a peer (reuses the dispatcher path)."""
+        if not self.sideband or not self._dispatcher:
+            return
+        try:
+            self._dispatcher.send_text(dest_hex, content)
+        except Exception:
+            pass
+        # Reflect the sent message promptly (it's saved to the shared DB).
+        self._poll_peer_messages()
 
     def dispatch_command(self, cmd_key: str, node_id: str | None = None, on_complete=None):
         wire = get_wire(cmd_key, node_id)

@@ -1,4 +1,4 @@
-"""screens/announce.py — Own LXMF address + Send Announce button."""
+"""screens/announce.py — Connect tab: own LXMF address + Connect (announce) button."""
 from __future__ import annotations
 
 from kivy.uix.boxlayout import BoxLayout
@@ -9,9 +9,9 @@ from kivy.utils import get_color_from_hex
 from .. import theme
 from ..theme import (
     COLOR_ON_SURFACE, COLOR_MUTED,
-    FONT_BODY, FONT_CAPTION, FONT_ADDRESS,
-    SCREEN_PADDING, SPACE_XS, SPACE_SM, SPACE_MD,
-    TOUCH_TARGET, TAB_HEIGHT,
+    FONT_CAPTION, FONT_ADDRESS,
+    SCREEN_PADDING, SPACE_MD,
+    TOUCH_TARGET,
 )
 from ..widgets import BigButton, StatusChip, SectionHeading, Panel
 
@@ -29,7 +29,7 @@ class AnnounceScreen(BoxLayout):
                          spacing=dp(SPACE_MD), **kwargs)
         self._app = app
 
-        self.add_widget(SectionHeading("[font=emoji]📢[/font]  Your Farm Address"))
+        self.add_widget(SectionHeading("[font=emoji]📡[/font]  Your Farm Address"))
 
         # ── Address panel (Field-Log card) ──────────────────────────────────
         card = Panel(size_hint_y=None)
@@ -71,34 +71,15 @@ class AnnounceScreen(BoxLayout):
         self.add_widget(card)
 
         # ── The one primary action on this screen (Mesa Red CTA) ────────────
-        btn = BigButton(icon="📢", label="Send Announce", variant="primary")
+        # Broadcasts the device announce over the HaLow HT-HD01 network. The
+        # action is unchanged from the former "Send Announce" button — only the
+        # label is renamed to "Connect".
+        btn = BigButton(icon="📡", label="Connect", variant="primary")
         btn.bind(on_press=self._send_announce)
         self.add_widget(btn)
 
         self._chip = StatusChip()
         self.add_widget(self._chip)
-
-        # ── Settings row ───────────────────────────────────────────────────
-        from kivy.uix.switch import Switch
-        settings_row = BoxLayout(
-            orientation="horizontal",
-            size_hint_y=None, height=dp(TAB_HEIGHT),
-            padding=[dp(SPACE_XS), dp(SPACE_XS)], spacing=dp(SPACE_SM),
-        )
-        settings_row.add_widget(Label(
-            text="Large text  (restart app to apply)",
-            font_size=sp(FONT_BODY),
-            color=get_color_from_hex(COLOR_ON_SURFACE),
-            halign="left",
-        ))
-        self._large_text_sw = Switch(
-            active=app._settings.large_text,
-            size_hint=(None, None),
-            size=(dp(90), dp(TOUCH_TARGET)),
-        )
-        self._large_text_sw.bind(active=self._on_large_text)
-        settings_row.add_widget(self._large_text_sw)
-        self.add_widget(settings_row)
 
         self.add_widget(BoxLayout())  # spacer
 
@@ -117,6 +98,3 @@ class AnnounceScreen(BoxLayout):
     def _send_announce(self, *_):
         self._app.send_announce()
         self._last_sent_label.text = "Last announce: just now"
-
-    def _on_large_text(self, _sw, active: bool):
-        self._app._settings.large_text = active
