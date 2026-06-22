@@ -138,6 +138,17 @@ def test_no_large_text_references_in_farmui():
     assert not hits, f"large_text still referenced in: {hits}"
 
 
+def test_build_lifts_content_for_soft_keyboard():
+    """build() must set Window.softinput_mode so the composer rises above the
+    Android keyboard (and drops back when dismissed). Source guard — build()
+    needs a Kivy Window, unavailable headless."""
+    import inspect
+    from sbapp.farmui import app as app_mod
+    src = inspect.getsource(app_mod.FarmApp.build)
+    assert "softinput_mode" in src
+    assert "below_target" in src
+
+
 def test_bigbutton_min_height():
     """BigButton height constant >= 96dp."""
     from kivy.metrics import dp

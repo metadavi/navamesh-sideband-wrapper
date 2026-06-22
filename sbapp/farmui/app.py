@@ -116,6 +116,13 @@ class FarmApp(App):
 
         Window.clearcolor = get_color_from_hex(theme.COLOR_BG)
 
+        # Lift content above the Android soft keyboard so the focused message
+        # field stays visible while typing, then drop back when it's dismissed.
+        # 'below_target' shifts the view so the focused TextInput sits just above
+        # the keyboard; it only acts while a TextInput is focused (the peer
+        # messenger composer), so the keyboard-free screens are unaffected.
+        Window.softinput_mode = "below_target"
+
         # Only force a fixed size on desktop dev; on Android use the full screen
         from kivy.utils import platform as kivy_platform
         if kivy_platform != "android":
