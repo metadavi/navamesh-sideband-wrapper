@@ -188,8 +188,22 @@ class FarmApp(App):
         for s in (home, gw_screen, peer_screen):
             self._sm.add_widget(s)
 
+        # Android hardware back button: navigate back within the app (a backward
+        # slide) instead of the default forward feel / app exit, when in a chat.
+        Window.bind(on_keyboard=self._on_keyboard)
+
         root.add_widget(self._sm)
         return root
+
+    def _on_keyboard(self, _window, key, *args):
+        """Handle the Android back key (27): leave a chat back to home; on home,
+        fall through to the default (minimise/exit)."""
+        if key == 27:
+            sm = getattr(self, "_sm", None)
+            if sm is not None and sm.current != "home":
+                self.go_home()
+                return True
+        return False
 
     def _build_topbar(self):
         """Canyon Dark 'instrument frame' top bar: brand mark + wordmark.
@@ -820,16 +834,22 @@ class FarmApp(App):
     def go_home(self):
         """Return from a chat screen to the two-tab home (Talk selected)."""
         self._active_peer_hash = None
-        self._goto_screen("home")
+        # Leaving a chat slides backward (opposite of entering one).
+        self._goto_screen("home", direction="right")
         try:
             if self._talk_tab is not None:
                 self._home_tabs.switch_to(self._talk_tab)
         except Exception:
             pass
 
-    def _goto_screen(self, name: str):
+    def _goto_screen(self, name: str, direction: str = "left"):
+        """Switch screens. direction 'left' = forward (entering), 'right' = back."""
         sm = getattr(self, "_sm", None)
         if sm is not None:
+            try:
+                sm.transition.direction = direction
+            except Exception:
+                pass
             sm.current = name
 
     def send_peer_text(self, dest_hex: str, content: str):

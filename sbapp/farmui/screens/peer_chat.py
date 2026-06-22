@@ -22,11 +22,11 @@ from .. import theme
 from ..theme import (
     COLOR_ON_SURFACE, COLOR_MUTED, COLOR_CARD, COLOR_HAIRLINE,
     COLOR_GATEWAY_HIGHLIGHT, COLOR_PRIMARY, COLOR_ON_PRIMARY, COLOR_SURFACE,
-    FONT_BODY, FONT_LABEL,
-    SCREEN_PADDING, SPACE_SM, SPACE_MD, CARD_PADDING, CARD_RADIUS,
+    FONT_BODY, FONT_LABEL, FONT_HEADING, FONT_ADDRESS,
+    SCREEN_PADDING, SPACE_XS, SPACE_SM, SPACE_MD, CARD_PADDING, CARD_RADIUS,
     HAIRLINE_WIDTH, INPUT_HEIGHT, TOUCH_TARGET,
 )
-from ..widgets import StatusChip, EmptyState, BackBar, _body
+from ..widgets import StatusChip, EmptyState, BackBar, Panel, _body, _display, _mono
 
 
 def _body_kw():
@@ -94,6 +94,31 @@ class PeerChatScreen(BoxLayout):
         self._backbar = BackBar(title="", on_back=app.go_home)
         self.add_widget(self._backbar)
 
+        # ── Peer identity card: name front-and-centre, address secondary ─────
+        self._header = Panel(size_hint_y=None, spacing=dp(SPACE_XS))
+        self._header.bind(minimum_height=self._header.setter("height"))
+        self._name_label = Label(
+            text="", bold=True,
+            font_size=sp(FONT_HEADING),
+            color=get_color_from_hex(COLOR_ON_SURFACE),
+            halign="center", valign="middle",
+            size_hint_y=None, height=dp(TOUCH_TARGET),
+            **_display(),
+        )
+        self._name_label.bind(width=lambda i, w: setattr(i, "text_size", (w, None)))
+        self._header.add_widget(self._name_label)
+        self._addr_label = Label(
+            text="",
+            font_size=sp(FONT_ADDRESS),
+            color=get_color_from_hex(COLOR_MUTED),
+            halign="center", valign="middle",
+            size_hint_y=None, height=dp(TOUCH_TARGET) / 2,
+            **_mono(),
+        )
+        self._addr_label.bind(width=lambda i, w: setattr(i, "text_size", (w, None)))
+        self._header.add_widget(self._addr_label)
+        self.add_widget(self._header)
+
         self._chip = StatusChip()
         self.add_widget(self._chip)
 
@@ -141,9 +166,8 @@ class PeerChatScreen(BoxLayout):
     def open_peer(self, display_name: str, dest_hex: str):
         """Reset the view for a freshly-tapped peer; history is filled by polling."""
         self._peer_hash = dest_hex
-        muted = COLOR_MUTED.lstrip("#")
-        self._backbar.set_title(
-            f"[b]{display_name}[/b]  [color={muted}]{dest_hex[:16]}…[/color]")
+        self._name_label.text = display_name or "(unnamed device)"
+        self._addr_label.text = dest_hex
         self._msgs.clear_widgets()
         self._msgs.add_widget(self._empty)
         self._input.text = ""
