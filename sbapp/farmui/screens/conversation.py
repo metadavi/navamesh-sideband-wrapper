@@ -14,7 +14,7 @@ from ..theme import (
     TOUCH_TARGET,
 )
 from ..widgets import (
-    BigButton, ResultCard, StatusChip, EmptyState, SectionHeading, Panel, BackBar,
+    BigButton, ResultCard, EmptyState, SectionHeading, Panel, BackBar,
 )
 from ..command_registry import COMMANDS
 from ..textfmt import render_reply
@@ -53,9 +53,6 @@ class ConversationScreen(BoxLayout):
         self._gw_label.bind(size=lambda i, _s: setattr(i, "text_size", i.size))
         header.add_widget(self._gw_label)
         self.add_widget(header)
-
-        self._chip = StatusChip()
-        self.add_widget(self._chip)
 
         # ── Command button grid (3×3, compact parchment command tiles) ──────
         grid = GridLayout(cols=3, size_hint_y=None, spacing=dp(SPACE_SM))
@@ -146,12 +143,6 @@ class ConversationScreen(BoxLayout):
         self._result_cards.append(card)
         self._msgs.add_widget(card)
 
-    def set_connected(self, connected: bool, detail: str = ""):
-        self._chip.set_connected(connected, detail)
-
-    def set_state(self, state: str, detail: str = ""):
-        self._chip.set_state(state, detail)
-
     def _set_buttons_enabled(self, enabled: bool):
         for btn in self._cmd_buttons:
             btn.disabled = not enabled
@@ -164,12 +155,18 @@ class ConversationScreen(BoxLayout):
     def _on_command(self, cmd):
         if self._in_flight:
             return
+        if cmd.needs_node:
+            # The node picker may be cancelled, so don't lock the UI or show the
+            # "Waiting…" card yet — only _run_command (fired when a node is
+            # actually chosen) commits to a send. The modal blocks double-taps.
+            self._app.open_node_picker(cmd, on_pick=self._run_command)
+            return
+        self._run_command(cmd.key)
+
+    def _run_command(self, cmd_key, node_id=None):
         self._in_flight = True
         self._set_buttons_enabled(False)
         # Replace the previous reply the moment a new command is sent.
         self._clear_results()
         self._show_waiting()
-        if cmd.needs_node:
-            self._app.open_node_picker(cmd, on_complete=self._on_command_done)
-        else:
-            self._app.dispatch_command(cmd.key, on_complete=self._on_command_done)
+        self._app.dispatch_command(cmd_key, node_id, on_complete=self._on_command_done)

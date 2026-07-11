@@ -9,6 +9,7 @@ from __future__ import annotations
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
+from kivy.uix.widget import Widget
 from kivy.metrics import dp, sp
 from kivy.utils import get_color_from_hex
 from kivy.graphics import Color, RoundedRectangle, Line
@@ -20,12 +21,16 @@ from ..theme import (
     SCREEN_PADDING, SPACE_XS, SPACE_SM, SPACE_MD,
     ROW_HEIGHT, CARD_RADIUS, HAIRLINE_WIDTH,
 )
-from ..widgets import StatusChip, EmptyState, SectionHeading
+from ..widgets import EmptyState, SectionHeading
 # Re-exported for backward compatibility; the canonical helper now lives in
 # farmui.devices so the gateway/peer rule has a single home.
 from ..devices import is_gateway_device, GATEWAY_DISPLAY_NAME  # noqa: F401
 
 _MAX_STREAM_ROWS = 200
+
+# Fixed width of the row's right-hand chevron. A left spacer of the same width
+# balances it so the device name + hash sit dead-centre in the card.
+_CHEVRON_W = 24
 
 
 def _mono_kw():
@@ -42,7 +47,7 @@ class AnnounceRow(BoxLayout):
     """
 
     def __init__(self, display_name: str, short_hash: str, time_ago: str,
-                 on_open=None, **kwargs):
+                 received=None, on_open=None, **kwargs):
         super().__init__(
             orientation="horizontal",
             size_hint_y=None, height=dp(ROW_HEIGHT),
@@ -52,6 +57,9 @@ class AnnounceRow(BoxLayout):
         self._on_open = on_open
         self._display_name = display_name
         self._short_hash = short_hash
+        # Announce received-time (epoch). Kept so the "time ago" label can be
+        # recomputed on every poll (it ticks up without a fresh announce).
+        self.received = received
         # Per-instance touch key: every row in the list shares one touch.ud dict,
         # so a shared literal key would be popped by whichever row is dispatched
         # first on touch-up (regardless of collision), leaving only one row
@@ -66,23 +74,33 @@ class AnnounceRow(BoxLayout):
                               rounded_rectangle=(self.x, self.y, self.width, self.height, radius))
         self.bind(pos=self._sync, size=self._sync)
 
+        # Left spacer mirrors the chevron on the right, so the centred
+        # name/hash block lands in the true middle of the card.
+        self.add_widget(Widget(size_hint_x=None, width=dp(_CHEVRON_W)))
+
         name_block = BoxLayout(orientation="vertical", spacing=dp(SPACE_XS))
-        name_block.add_widget(Label(
+        name_lbl = Label(
             text=display_name,
             font_size=sp(FONT_BODY),
             color=get_color_from_hex(COLOR_ON_SURFACE),
-            halign="left", valign="middle",
+            halign="center", valign="middle",
             size_hint_y=None, height=dp(28),
-        ))
+        )
+        name_lbl.bind(width=lambda i, w: setattr(i, "text_size", (w, None)))
+        self._name_lbl = name_lbl
+        name_block.add_widget(name_lbl)
+        # The LXMF address is intentionally not shown here — name + "time ago" is
+        # enough for the Talk list; the full address lives in the conversation view.
         sub = Label(
-            text=f"{short_hash}  ·  {time_ago}",
+            text=f"{time_ago}",
             font_size=sp(FONT_CAPTION),
             color=get_color_from_hex(COLOR_MUTED),
-            halign="left", valign="middle",
+            halign="center", valign="middle",
             size_hint_y=None, height=dp(20),
             **_mono_kw(),
         )
         sub.bind(width=lambda i, w: setattr(i, "text_size", (w, None)))
+        self._sub = sub
         name_block.add_widget(sub)
         self.add_widget(name_block)
 
@@ -91,9 +109,18 @@ class AnnounceRow(BoxLayout):
             text="›",
             font_size=sp(FONT_HEADING),
             color=get_color_from_hex(COLOR_MUTED),
-            size_hint_x=None, width=dp(24),
+            size_hint_x=None, width=dp(_CHEVRON_W),
             halign="center", valign="middle",
         ))
+
+    def refresh_time_ago(self, time_ago: str):
+        """Re-render the caption (called per poll) — just the 'time ago' now."""
+        self._sub.text = f"{time_ago}"
+
+    def set_display_name(self, display_name: str):
+        """Update the shown name (e.g. the farmer saved a local alias)."""
+        self._display_name = display_name
+        self._name_lbl.text = display_name
 
     def _sync(self, *_):
         radius = dp(CARD_RADIUS)
@@ -127,9 +154,6 @@ class StreamScreen(BoxLayout):
 
         self.add_widget(SectionHeading("[font=emoji]💬[/font]  Nearby devices"))
 
-        self._chip = StatusChip()
-        self.add_widget(self._chip)
-
         scroll = ScrollView(size_hint=(1, 1))
         self._list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(SPACE_SM))
         self._list.bind(minimum_height=self._list.setter("height"))
@@ -138,11 +162,12 @@ class StreamScreen(BoxLayout):
 
         self._empty = EmptyState(
             icon="📡",
-            message="No devices heard yet.\nTap Connect, then check your radio.",
+            message="No devices heard yet.\nYour phone announces itself automatically.\nCheck the white radio box.",
         )
         self._list.add_widget(self._empty)
 
-    def add_announce(self, display_name: str, short_hash: str, time_ago: str):
+    def add_announce(self, display_name: str, short_hash: str, time_ago: str,
+                     received=None):
         if self._empty.parent:
             self._list.remove_widget(self._empty)
         if short_hash in self._rows:
@@ -154,18 +179,29 @@ class StreamScreen(BoxLayout):
             display_name=display_name,
             short_hash=short_hash,
             time_ago=time_ago,
+            received=received,
             on_open=self._app.open_chat,
         )
         self._list.add_widget(row)
         self._rows[short_hash] = row
 
+    def update_name(self, short_hash: str, display_name: str):
+        """Rename a visible row in place (alias saved/cleared). No-op if absent."""
+        row = self._rows.get(short_hash)
+        if row is not None:
+            row.set_display_name(display_name)
+
+    def refresh_times(self, formatter):
+        """Recompute every visible row's 'time ago' label using `formatter(epoch)`.
+
+        Called on each poll so labels tick up ("1m ago" → "2m ago") without a
+        fresh announce. Rows with no stored timestamp are left untouched.
+        """
+        for row in self._rows.values():
+            if row.received is not None:
+                row.refresh_time_ago(formatter(row.received))
+
     def clear(self):
         self._list.clear_widgets()
         self._list.add_widget(self._empty)
         self._rows.clear()
-
-    def set_connected(self, connected: bool, detail: str = ""):
-        self._chip.set_connected(connected, detail)
-
-    def set_state(self, state: str, detail: str = ""):
-        self._chip.set_state(state, detail)

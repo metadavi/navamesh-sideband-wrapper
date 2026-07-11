@@ -13,7 +13,7 @@ from ..theme import (
     SCREEN_PADDING, SPACE_MD,
     TOUCH_TARGET,
 )
-from ..widgets import BigButton, StatusChip, SectionHeading, Panel
+from ..widgets import BigButton, SectionHeading, Panel
 
 
 def _mono_kw():
@@ -78,9 +78,6 @@ class AnnounceScreen(BoxLayout):
         btn.bind(on_press=self._send_announce)
         self.add_widget(btn)
 
-        self._chip = StatusChip()
-        self.add_widget(self._chip)
-
         self.add_widget(BoxLayout())  # spacer
 
     def update_address(self, address_hex: str):
@@ -88,12 +85,6 @@ class AnnounceScreen(BoxLayout):
 
     def update_last_sent(self, ts_str: str):
         self._last_sent_label.text = f"Last announce: {ts_str}"
-
-    def set_connected(self, connected: bool, detail: str = ""):
-        self._chip.set_connected(connected, detail)
-
-    def set_state(self, state: str, detail: str = ""):
-        self._chip.set_state(state, detail)
 
     def _send_announce(self, *_):
         self._app.send_announce()

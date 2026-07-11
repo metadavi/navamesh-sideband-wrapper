@@ -25,7 +25,7 @@ def test_template_has_hthd01_udp_interface():
     assert "type = UDPInterface" in t
     assert "listen_ip = 0.0.0.0" in t
     assert "listen_port = 4242" in t
-    assert "forward_ip = 192.168.10.255" in t
+    assert "forward_ip = 192.168.100.255" in t
     assert "forward_port = 4242" in t
     assert "name = HTHD01_UDP" in t
 

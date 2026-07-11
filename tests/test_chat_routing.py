@@ -32,9 +32,16 @@ class _FakeConv:
 class _FakePeer:
     def __init__(self):
         self.opened = None
+        self.closed = False
 
     def open_peer(self, name, h):
         self.opened = (name, h)
+
+    def close_peer(self):
+        self.closed = True
+
+    def set_display_name(self, name):
+        pass
 
 
 class _FakeSM:
@@ -45,9 +52,19 @@ class _FakeSM:
 class _FakeSettings:
     def __init__(self):
         self.saved = None
+        self.aliases = {}
 
     def set_gateway(self, name, h):
         self.saved = (name, h)
+
+    def get_peer_alias(self, dest_hex):
+        return self.aliases.get(dest_hex)
+
+    def set_peer_alias(self, dest_hex, alias):
+        self.aliases[dest_hex] = alias
+
+    def clear_peer_alias(self, dest_hex):
+        self.aliases.pop(dest_hex, None)
 
 
 def _routing_app(core=None):
@@ -97,12 +114,22 @@ def test_open_chat_gateway_detection_is_case_insensitive_substring():
     assert app._gateway_hash == "0a0b"
 
 
+def test_open_peer_uses_alias_when_present():
+    app = _routing_app()
+    app._settings.aliases["def456"] = "North barn phone"
+    app.open_chat("Phone B", "def456")
+    assert app._peer_screen.opened == ("North barn phone", "def456")
+
+
 def test_go_home_clears_active_peer_and_returns_home():
     app = _routing_app()
     app.open_chat("Phone B", "def456")
     app.go_home()
     assert app._sm.current == "home"
     assert app._active_peer_hash is None
+    # The visible peer session is cleared too — re-entering starts blank.
+    assert app._peer_screen.closed is True
+    assert app._shown_peer_msgs == set()
 
 
 def test_send_peer_text_uses_dispatcher_and_refreshes():
@@ -129,10 +156,16 @@ def test_gateway_screen_replaces_previous_reply_source_guard():
     import inspect
     from sbapp.farmui.screens import conversation as conv_mod
 
-    on_cmd = inspect.getsource(conv_mod.ConversationScreen._on_command)
-    assert "_clear_results" in on_cmd, (
+    # The clear/waiting sequence lives in _run_command — the point that
+    # actually commits to a send. _on_command only routes there (directly, or
+    # via the node picker, which may be cancelled without clearing anything).
+    run_cmd = inspect.getsource(conv_mod.ConversationScreen._run_command)
+    assert "_clear_results" in run_cmd, (
         "a new command must clear the previous reply before dispatching")
-    assert "_show_waiting" in on_cmd
+    assert "_show_waiting" in run_cmd
+
+    on_cmd = inspect.getsource(conv_mod.ConversationScreen._on_command)
+    assert "_run_command" in on_cmd
 
     clear = inspect.getsource(conv_mod.ConversationScreen._clear_results)
     assert "_result_cards" in clear and "clear()" in clear
@@ -192,3 +225,76 @@ def test_peer_message_direction(monkeypatch):
     rendered.clear()
     app._poll_peer_messages()
     assert rendered == []
+
+
+def test_open_peer_baselines_history_and_renders_only_new_messages():
+    """Entering a peer chat must NOT replay old DB history; only messages
+    exchanged during the session render. Nothing is deleted from the DB —
+    the old rows stay put, they are just marked as already seen."""
+    peer_hex = "11" * 16
+    peer = bytes.fromhex(peer_hex)
+    me = bytes.fromhex("22" * 16)
+
+    history = [
+        {"hash": b"\x01", "source": peer, "content": b"old inbound"},
+        {"hash": b"\x02", "source": me, "content": b"old outbound"},
+    ]
+
+    rendered = []
+
+    class FakePeerScreen(_FakePeer):
+        def add_message(self, text, outbound):
+            rendered.append((text, outbound))
+
+    class FakeCore:
+        def list_messages(self, dest, limit=None):
+            return list(history)
+
+    app = _routing_app(core=FakeCore())
+    app._peer_screen = FakePeerScreen()
+    app.open_peer("Phone B", peer_hex)
+
+    # The old history was baselined, not rendered.
+    assert rendered == []
+    assert app._shown_peer_msgs == {"01", "02"}
+
+    # Old rows are still in the fake DB — baselining never deleted anything.
+    assert len(history) == 2
+
+    # A message that arrives during the session renders normally (inbound),
+    # and one we send renders as outbound.
+    history.append({"hash": b"\x03", "source": peer, "content": b"new inbound"})
+    history.append({"hash": b"\x04", "source": me, "content": b"new outbound"})
+    app._poll_peer_messages()
+    assert rendered == [("new inbound", False), ("new outbound", True)]
+
+
+def test_reentering_peer_chat_baselines_previous_session():
+    """Leave a chat, message lands in the DB meanwhile, re-enter: the chat
+    starts blank again (the earlier session's messages are now history)."""
+    peer_hex = "11" * 16
+    peer = bytes.fromhex(peer_hex)
+    history = [{"hash": b"\x01", "source": peer, "content": b"session one"}]
+
+    rendered = []
+
+    class FakePeerScreen(_FakePeer):
+        def add_message(self, text, outbound):
+            rendered.append((text, outbound))
+
+    class FakeCore:
+        def list_messages(self, dest, limit=None):
+            return list(history)
+
+    app = _routing_app(core=FakeCore())
+    app._peer_screen = FakePeerScreen()
+
+    app.open_peer("Phone B", peer_hex)
+    assert rendered == []          # baselined
+    app.go_home()
+    assert app._peer_screen.closed is True
+
+    history.append({"hash": b"\x02", "source": peer, "content": b"while away"})
+    app.open_peer("Phone B", peer_hex)
+    assert rendered == []          # both old messages baselined on re-entry
+    assert app._shown_peer_msgs == {"01", "02"}

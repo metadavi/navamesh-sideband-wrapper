@@ -307,16 +307,7 @@ class ResultCard(BoxLayout):
         if (abs(touch.x - origin[0]) > dp(theme.SPACE_MD) or
                 abs(touch.y - origin[1]) > dp(theme.SPACE_MD)):
             return False  # it was a scroll drag, not a tap
-        from kivy.uix.modalview import ModalView
-        from kivy.uix.image import Image
-        modal = ModalView(size_hint=(1, 1), background_color=(0, 0, 0, 0.92),
-                          auto_dismiss=True)
-        full = Image(texture=img.texture, fit_mode="contain")
-        # The image fills the whole modal, so there is no "outside" for
-        # auto_dismiss to catch — dismiss on a tap on the image itself.
-        full.bind(on_touch_down=lambda *_: (modal.dismiss(), True)[1])
-        modal.add_widget(full)
-        modal.open()
+        build_map_viewer(img.texture).open()
         return True
 
     def _update_rect(self, *_):
@@ -331,6 +322,84 @@ class ResultCard(BoxLayout):
     def _update_height(self):
         extra = self._img_height + (dp(theme.SPACE_SM) if self._img_height > 0 else 0)
         self.height = self._label.height + extra + 2 * dp(theme.CARD_PADDING)
+
+
+def build_map_viewer(texture):
+    """Full-screen pinch-zoom/pan viewer for an inline map image.
+
+    Returns an UNOPENED ModalView (the caller calls .open()) so the structure
+    is testable without touch gestures. Layout: ModalView > FloatLayout >
+    [ScatterLayout (pinch zoom 1x-8x, pan, do_rotation=False) > Image
+    (contain-fit), close (×) button on top]. Double-tap resets the zoom.
+    The backdrop is a translucent dim so the app stays visible behind the
+    map. At 1x zoom a tap on the letterbox (outside the drawn image) closes
+    the viewer; once zoomed in, every touch pans/zooms instead — taps on the
+    image itself never dismiss. auto_dismiss=True also serves ESC / Android
+    back.
+    """
+    from kivy.uix.modalview import ModalView
+    from kivy.uix.floatlayout import FloatLayout
+    from kivy.uix.scatterlayout import ScatterLayout
+    from kivy.uix.image import Image
+
+    modal = ModalView(size_hint=(1, 1),
+                      background_color=(0, 0, 0, 0.45),
+                      auto_dismiss=True)
+    root = FloatLayout()
+
+    scatter = ScatterLayout(do_rotation=False,
+                            scale_min=1.0, scale_max=8.0)
+    img = Image(texture=texture, fit_mode="contain", size_hint=(1, 1))
+    scatter.add_widget(img)
+
+    def _reset(*_):
+        scatter.scale = 1.0
+        scatter.pos = (0, 0)
+
+    def _drawn_rect():
+        # Rect of the contain-fit texture inside the (full-screen) image
+        # widget, in scatter-local coords — the rest is letterbox.
+        iw, ih = img.size
+        tw, th = texture.size if texture is not None else (0, 0)
+        if not tw or not th or not iw or not ih:
+            return 0, 0, iw, ih
+        s = min(iw / tw, ih / th)
+        dw, dh = tw * s, th * s
+        return (iw - dw) / 2, (ih - dh) / 2, dw, dh
+
+    def _on_down(_w, touch):
+        if touch.is_double_tap and scatter.collide_point(*touch.pos):
+            _reset()
+            return False
+        # Not zoomed in: a tap outside the image frame exits the viewer.
+        if scatter.scale <= 1.001:
+            lx, ly = scatter.to_local(*touch.pos)
+            x, y, w, h = _drawn_rect()
+            if not (x <= lx <= x + w and y <= ly <= y + h):
+                modal.dismiss()
+                return True
+        return False  # let the Scatter's own pinch/pan handling run
+    scatter.bind(on_touch_down=_on_down)
+    root.add_widget(scatter)
+
+    # × is U+00D7 — present in the bundled fonts. U+2715 and U+25CF are not
+    # (they render as boxes), so don't swap the glyph for a "nicer" one.
+    close = Button(
+        text="×",
+        font_size=sp(theme.FONT_HEADING), bold=True,
+        size_hint=(None, None),
+        size=(dp(theme.TOUCH_TARGET), dp(theme.TOUCH_TARGET)),
+        pos_hint={"right": 1, "top": 1},
+        background_normal="", background_down="",
+        background_color=(0, 0, 0, 0.35),
+        color=(1, 1, 1, 1),
+    )
+    close.bind(on_release=lambda *_: modal.dismiss())
+    # Sibling of the scatter, added after it → receives touches first, so
+    # closing never zooms the map underneath.
+    root.add_widget(close)
+    modal.add_widget(root)
+    return modal
 
 
 class StatusChip(Label):
@@ -525,3 +594,67 @@ class EmptyState(BoxLayout):
             halign="center",
             **_body(),
         ))
+
+
+class NodePickerDialog:
+    """Selection-only "pick a node to map" dialog (Map — one node).
+
+    Lists the node IDs the gateway reported via its "List nodes" reply. The
+    farmer taps one node and the wrapper sends `map <id>` — no typing anywhere.
+    If no nodes are cached yet it shows a friendly hint and only a Close button,
+    and never picks/sends anything. Built on the same ModalView + Panel + BigButton
+    language as the rest of the Field-Log UI.
+    """
+
+    def __init__(self, nodes, on_pick):
+        from kivy.uix.modalview import ModalView
+        from kivy.uix.scrollview import ScrollView
+
+        self._on_pick = on_pick
+        self._modal = ModalView(
+            size_hint=(0.9, 0.8),
+            background_color=(0, 0, 0, 0.55),
+            background="",
+            auto_dismiss=True,
+        )
+        panel = Panel(padding=dp(theme.SPACE_MD), spacing=dp(theme.SPACE_MD))
+
+        panel.add_widget(SectionHeading("Pick a node to map"))
+
+        if nodes:
+            scroll = ScrollView(size_hint=(1, 1))
+            col = BoxLayout(orientation="vertical", size_hint_y=None,
+                            spacing=dp(theme.SPACE_SM))
+            col.bind(minimum_height=col.setter("height"))
+            for node_id in nodes:
+                btn = BigButton(icon="🛰", label=node_id, variant="command")
+                btn.bind(on_release=lambda _b, nid=node_id: self._choose(nid))
+                col.add_widget(btn)
+            scroll.add_widget(col)
+            panel.add_widget(scroll)
+        else:
+            hint = Label(
+                text="No nodes found yet.\nTap List Nodes first.",
+                font_size=sp(theme.FONT_BODY),
+                color=get_color_from_hex(theme.COLOR_MUTED),
+                halign="center", valign="middle",
+                **_body(),
+            )
+            hint.bind(size=lambda i, _s: setattr(i, "text_size", i.size))
+            panel.add_widget(hint)
+
+        close = BigButton(label="Close", variant="command")
+        close.size_hint_y = None
+        close.bind(on_release=lambda *_: self._modal.dismiss())
+        panel.add_widget(close)
+
+        self._modal.add_widget(panel)
+
+    def _choose(self, node_id):
+        # A command is sent only from here — i.e. only when a node is tapped.
+        self._modal.dismiss()
+        if self._on_pick is not None:
+            self._on_pick(node_id)
+
+    def open(self):
+        self._modal.open()

@@ -184,3 +184,34 @@ def test_status_chip_dot_uses_renderable_glyph():
     src = inspect.getsource(widgets.StatusChip.set_state)
     assert "●" not in src, "bare ● (U+25CF) has no glyph and renders as a box"
     assert "[color=" in src, "the dot must carry the state hue via color markup"
+
+
+def test_talk_is_the_only_farmer_tab():
+    """The manual Connect tab is gone: Talk is the single farmer tab (the
+    dev-gated Debug tab may still be appended). Source guard — build() needs a
+    Kivy Window, unavailable headless."""
+    import inspect
+    from sbapp.farmui import app as app_mod
+    src = inspect.getsource(app_mod.FarmApp.build)
+    assert '"Connect"' not in src
+    assert '"Talk"' in src
+
+
+def test_topbar_has_no_tagline():
+    """The decorative FIELD LINK tagline is removed from the top bar."""
+    import inspect
+    from sbapp.farmui import app as app_mod
+    assert "FIELD LINK" not in inspect.getsource(app_mod.FarmApp._build_topbar)
+
+
+def test_farmer_screens_have_no_status_chip():
+    """No farmer-facing screen shows the mesh status chip any more. The
+    StatusChip class itself survives (connectivity logic + dev diagnostics
+    still use its states)."""
+    import inspect
+    from sbapp.farmui.screens import stream, conversation, peer_chat, announce
+    for mod in (stream, conversation, peer_chat, announce):
+        assert "StatusChip(" not in inspect.getsource(mod), mod.__name__
+    from sbapp.farmui.widgets import StatusChip
+    assert hasattr(StatusChip, "status_text")
+    assert hasattr(StatusChip, "status_color")

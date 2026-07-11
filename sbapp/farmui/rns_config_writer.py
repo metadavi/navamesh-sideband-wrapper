@@ -88,7 +88,7 @@ def free_udp_port() -> int:
 # broadcast address to reach the peer radio.
 HTHD01_LISTEN_IP    = "0.0.0.0"
 HTHD01_LISTEN_PORT  = 4242
-HTHD01_FORWARD_IP   = "192.168.10.255"
+HTHD01_FORWARD_IP   = "192.168.100.255"
 HTHD01_FORWARD_PORT = 4242
 HTHD01_IFAC_NAME    = "HTHD01_UDP"
 

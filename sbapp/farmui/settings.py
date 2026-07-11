@@ -14,6 +14,7 @@ _DEFAULT = {
     "gateway_hash":         None,
     "gateway_display_name": None,
     "node_cache":           [],
+    "peer_aliases":         {},
     "dev_mode":             False,
 }
 
@@ -63,6 +64,31 @@ class FarmSettings:
     def node_cache(self, value: list[str]):
         self._data["node_cache"] = list(value)
         self._save()
+
+    # ── Local peer aliases (UI-only) ────────────────────────────────────────
+    # Maps a peer's LXMF destination hash (hex) → the farmer's local name for
+    # it. Purely a wrapper-side display preference stored in this JSON file; it
+    # never alters LXMF app_data, Sideband contacts, identities, messages, or
+    # the announce DB, and it changes nothing about what either device announces.
+    @property
+    def peer_aliases(self) -> dict:
+        return dict(self._data.get("peer_aliases", {}))
+
+    def get_peer_alias(self, dest_hex: str) -> Optional[str]:
+        return self._data.get("peer_aliases", {}).get(dest_hex)
+
+    def set_peer_alias(self, dest_hex: str, alias: str):
+        a = dict(self._data.get("peer_aliases", {}))
+        a[dest_hex] = str(alias)
+        self._data["peer_aliases"] = a
+        self._save()
+
+    def clear_peer_alias(self, dest_hex: str):
+        a = dict(self._data.get("peer_aliases", {}))
+        if dest_hex in a:
+            del a[dest_hex]
+            self._data["peer_aliases"] = a
+            self._save()
 
     def set_gateway(self, display_name: str, hash_hex: str):
         self._data["gateway_hash"]         = hash_hex

@@ -60,10 +60,15 @@ class FarmApp(App):
         self._node_cache: list[str] = []
         # Hashes of gateway replies already shown in the gateway command screen.
         self._shown_msgs: set[str] = set()
-        # Active peer conversation (Talk → tap a non-gateway device) + its
-        # already-rendered message hashes (reset each time a peer is opened).
+        # Active peer conversation (Talk → tap a non-gateway device) + the
+        # message hashes already accounted for this chat session. On open the
+        # set is seeded with every message already in the DB (the baseline), so
+        # only messages sent/received while the chat is open are rendered.
         self._active_peer_hash: str | None = None
         self._shown_peer_msgs: set[str] = set()
+        # Last announced (LXMF app_data) name heard per peer, so clearing a
+        # local alias can fall back to what the device actually announces.
+        self._announced_names: dict[str, str] = {}
         # True once we have ever read an announce row this session — lets the
         # status chip tell "listening (none yet)" from "mesh quiet (gone stale)".
         self._heard_any_announce = False
@@ -131,7 +136,7 @@ class FarmApp(App):
         root = BoxLayout(orientation="vertical")
         root.add_widget(self._build_topbar())
 
-        # ── Navigation: a ScreenManager wraps the two-tab home and the pushed
+        # ── Navigation: a ScreenManager wraps the Talk home and the pushed
         # chat screens. Tapping a device in Talk opens the right chat screen
         # (gateway dashboard or peer messenger); each has a Back control. ───────
         tabs = TabbedPanel(do_default_tab=False, size_hint=(1, 1),
@@ -158,9 +163,11 @@ class FarmApp(App):
         # updates. Read from farmui's own settings; no backend state involved.
         self._restore_gateway()
 
-        # Exactly two farmer tabs: Connect (announce) and Talk (devices).
+        # A single farmer tab: Talk (devices). Announces happen automatically
+        # (_start_auto_announces), so the manual Connect tab is gone. The
+        # AnnounceScreen is still constructed above (parentless) because
+        # _init_sideband() updates its address label.
         tab_specs = [
-            (self._ann_screen,  "Connect",  "📡"),
             (self._str_screen,  "Talk",     "💬"),
         ]
         # Optional dev-only diagnostics tab (hidden from farmers; see dev_diagnostics).
@@ -206,6 +213,14 @@ class FarmApp(App):
         """Handle the Android back key (27): leave a chat back to home; on home,
         fall through to the default (minimise/exit)."""
         if key == 27:
+            # An open modal (map viewer, node picker) owns the back key: close
+            # it instead of navigating underneath it. This handler was bound at
+            # build time, so it can win the dispatch over the modal's own.
+            from kivy.uix.modalview import ModalView
+            for w in list(Window.children):
+                if isinstance(w, ModalView):
+                    w.dismiss()
+                    return True
             sm = getattr(self, "_sm", None)
             if sm is not None and sm.current != "home":
                 self.go_home()
@@ -215,9 +230,7 @@ class FarmApp(App):
     def _build_topbar(self):
         """Canyon Dark 'instrument frame' top bar: brand mark + wordmark.
 
-        Branding only — it intentionally holds no live state, so the polling
-        path (_poll → screen.set_state) is untouched. Per-screen status chips
-        continue to carry connectivity.
+        Branding only — it intentionally holds no live state.
         """
         from kivy.uix.label import Label as _Label
         from kivy.graphics import Color, Rectangle
@@ -248,15 +261,6 @@ class FarmApp(App):
         wordmark.bind(size=lambda inst, _s: setattr(inst, "text_size", inst.size))
         bar.add_widget(wordmark)
 
-        tagline = _Label(
-            text="FIELD LINK",
-            font_size=sp(theme.FONT_CAPTION),
-            color=get_color_from_hex(theme.COLOR_ACCENT),
-            halign="right", valign="middle",
-            **_mono(),
-        )
-        tagline.bind(size=lambda inst, _s: setattr(inst, "text_size", inst.size))
-        bar.add_widget(tagline)
         return bar
 
     @staticmethod
@@ -304,6 +308,7 @@ class FarmApp(App):
             except Exception:
                 pass
         self._start_service()
+        self._start_auto_announces()
 
     def _ensure_hthd01_config(self) -> bool:
         """Persist the HT-HD01 UDP interface into Sideband's RNS config template
@@ -610,6 +615,10 @@ class FarmApp(App):
                 content = m.get("content")
                 text = (content.decode("utf-8", "replace")
                         if isinstance(content, (bytes, bytearray)) else (content or ""))
+                # Cache node IDs from a "List nodes" reply so "Map — one node"
+                # can offer them. parse_nodes_reply only matches "!"-prefixed
+                # node lines, so non-nodes replies yield [] and are ignored.
+                self._maybe_cache_nodes(text)
                 image_bytes, image_ext = None, "png"
                 fields = getattr(m.get("lxm"), "fields", None) or {}
                 img = fields.get(LXMF.FIELD_IMAGE)
@@ -717,14 +726,30 @@ class FarmApp(App):
 
     def _refresh_announces(self):
         """Populate the Stream tab from received announces (idempotent: the
-        Stream dedupes by hash, so re-adding heard announces is a no-op)."""
+        Stream dedupes by hash, so re-adding heard announces is a no-op).
+
+        Display precedence per row: local alias (FarmSettings, wrapper-only)
+        → announced name → "(unnamed device)". The announced name is also
+        remembered so clearing an alias later can fall back to it. Finally
+        every visible row's "time ago" label is recomputed so it ticks up
+        between announces.
+        """
         if not self.sideband:
             return
+        settings = getattr(self, "_settings", None)
+        names = getattr(self, "_announced_names", None)
         for ann in self.list_announces_safe():
             if ann["type"] != "lxmf.delivery":
                 continue  # only show peer (messaging) announces in the farm stream
-            name = ann["name"] or "(unnamed device)"
-            self._str_screen.add_announce(name, ann["dest_hex"], self._time_ago(ann["time"]))
+            dest_hex = ann["dest_hex"]
+            if names is not None and ann["name"]:
+                names[dest_hex] = ann["name"]
+            alias = settings.get_peer_alias(dest_hex) if settings else None
+            name = alias or ann["name"] or "(unnamed device)"
+            self._str_screen.add_announce(
+                name, dest_hex, self._time_ago(ann["time"]), ann["time"])
+        # Tick every visible row's "time ago" forward on each poll.
+        self._str_screen.refresh_times(self._time_ago)
 
     # ── Read-only diagnostics accessors (used by the Debug tab) ────────────────
 
@@ -773,12 +798,46 @@ class FarmApp(App):
         except Exception:
             pass
 
+    # ── Automatic announces (UI-layer scheduling only) ────────────────────────
+    # Always announce via send_announce() → the `wants.announce` flag the
+    # service consumes; never lxmf_announce() from the client. Class-level
+    # None defaults so __new__-constructed test apps see the attributes.
+    _auto_announce_interval = 240.0
+    # First announce fires shortly after backend bring-up, inside CONNECT_GRACE:
+    # announcing immediately would hit the service RPC before it is up and
+    # silently no-op. The service's own start_announce covers the boot window.
+    _auto_announce_first_delay = 15.0
+    _announce_ev = None
+    _announce_first_ev = None
+
+    def _auto_announce_tick(self, _dt):
+        self.send_announce()
+
+    def _start_auto_announces(self):
+        """One announce shortly after backend bring-up, then every 4 minutes.
+
+        Idempotent: a second call (e.g. a repeated backend start) schedules
+        nothing, so there is never more than one timer pair.
+        """
+        if self._announce_ev is not None:
+            return
+        self._announce_first_ev = Clock.schedule_once(
+            self._auto_announce_tick, self._auto_announce_first_delay)
+        self._announce_ev = Clock.schedule_interval(
+            self._auto_announce_tick, self._auto_announce_interval)
+
     def _restore_gateway(self):
         """Re-pin the saved farm gateway from farmui settings, if one exists.
 
         Called once during build() after the screens are created. Reads only
         FarmSettings (app-private JSON); does not touch Sideband/RNS/LXMF.
         """
+        try:
+            # Restore the cached node IDs (from prior "List nodes" replies) so
+            # "Map — one node" can offer them straight after a relaunch.
+            self._node_cache = list(self._settings.node_cache)
+        except Exception:
+            self._node_cache = []
         try:
             saved_hash = self._settings.gateway_hash
             if not saved_hash:
@@ -830,17 +889,86 @@ class FarmApp(App):
             self.open_peer(display_name, dest_hex)
 
     def open_peer(self, display_name: str, dest_hex: str):
-        """Open the free-text messenger for a peer and load its history."""
+        """Open the free-text messenger for a peer, showing this session only.
+
+        Existing DB history is baselined (marked as seen, not rendered), so the
+        chat starts blank and only messages exchanged while it is open appear.
+        Nothing is deleted — the full history stays in Sideband's DB untouched.
+        """
+        alias = None
+        try:
+            alias = self._settings.get_peer_alias(dest_hex)
+        except Exception:
+            pass
+        shown = alias or display_name or "(unnamed device)"
         self._active_peer_hash = dest_hex
         self._shown_peer_msgs = set()
-        self._peer_screen.open_peer(display_name, dest_hex)
+        self._peer_screen.open_peer(shown, dest_hex)
         self._goto_screen("peer_chat")
-        # Fill history immediately rather than waiting for the next 2s poll.
-        self._poll_peer_messages()
+        self._baseline_peer_messages()
+
+    def _baseline_peer_messages(self):
+        """Mark every message already stored for the active peer as seen.
+
+        Read-only against the shared DB: the hashes are added to
+        _shown_peer_msgs so _poll_peer_messages skips them, making the chat a
+        per-session view without deleting or mutating any message row.
+        """
+        if not self.sideband or not self._active_peer_hash:
+            return
+        try:
+            peer = bytes.fromhex(self._active_peer_hash)
+        except Exception:
+            return
+        try:
+            msgs = self.sideband.list_messages(peer, limit=50)
+        except Exception:
+            return
+        for m in msgs or []:
+            try:
+                h = m.get("hash")
+                key = h.hex() if isinstance(h, (bytes, bytearray)) else str(h)
+                self._shown_peer_msgs.add(key)
+            except Exception:
+                continue
+
+    def rename_peer(self, dest_hex: str, alias: str):
+        """Save/clear a local alias for a peer (wrapper-only; FarmSettings JSON).
+
+        A non-empty alias is persisted and shown immediately in the chat header
+        and the Talk row; an empty one clears the alias and falls back to the
+        peer's announced name. LXMF app_data, contacts, identities, messages,
+        and the announce DB are never touched.
+        """
+        alias = (alias or "").strip()
+        try:
+            if alias:
+                self._settings.set_peer_alias(dest_hex, alias)
+            else:
+                self._settings.clear_peer_alias(dest_hex)
+        except Exception:
+            pass
+        announced = getattr(self, "_announced_names", {}).get(dest_hex)
+        shown = alias or announced or "(unnamed device)"
+        if self._active_peer_hash == dest_hex:
+            try:
+                self._peer_screen.set_display_name(shown)
+            except Exception:
+                pass
+        try:
+            self._str_screen.update_name(dest_hex, shown)
+        except Exception:
+            pass
 
     def go_home(self):
         """Return from a chat screen to the two-tab home (Talk selected)."""
         self._active_peer_hash = None
+        self._shown_peer_msgs = set()
+        # Clear the visible peer chat session — re-entering starts blank again.
+        try:
+            self._peer_screen.close_peer()
+        except Exception:
+            pass
         # Leaving a chat slides backward (opposite of entering one).
         self._goto_screen("home", direction="right")
         try:
@@ -904,16 +1032,36 @@ class FarmApp(App):
             if on_complete:
                 Clock.schedule_once(lambda _: on_complete(), 0)
 
-    def open_node_picker(self, cmd, on_complete=None):
-        if self._node_cache:
-            node_id = self._node_cache[0]
-            self.dispatch_command(cmd.key, node_id, on_complete=on_complete)
-        else:
-            self._conv_screen.add_result(
-                "No node list yet — tap 'List nodes' first, then try 'Map — one node'."
-            )
-            if on_complete:
-                Clock.schedule_once(lambda _: on_complete(), 0)
+    def _maybe_cache_nodes(self, text: str):
+        """Parse + persist node IDs from a gateway reply, if it is a node list.
+
+        parse_nodes_reply returns only "!"-prefixed node IDs, so any reply that
+        isn't a "List nodes" response yields [] and leaves the cache untouched.
+        """
+        try:
+            from .dispatch import parse_nodes_reply
+            nodes = parse_nodes_reply(text)
+        except Exception:
+            return
+        if nodes:
+            self._node_cache = nodes
+            try:
+                self._settings.node_cache = nodes
+            except Exception:
+                pass
+
+    def open_node_picker(self, cmd, on_pick):
+        """Open the selection-only node picker for "Map — one node".
+
+        on_pick(cmd_key, node_id) is invoked only when the farmer taps a node;
+        closing/cancelling sends nothing. If no nodes are cached, the dialog
+        shows a friendly hint and only a Close button.
+        """
+        from .widgets import NodePickerDialog
+        NodePickerDialog(
+            nodes=list(self._node_cache),
+            on_pick=lambda node_id: on_pick(cmd.key, node_id),
+        ).open()
 
 
 def run():
