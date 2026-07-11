@@ -1,0 +1,13 @@
+[Unit]
+Description=Navamesh Farm update server (static APK host for phone OTA updates)
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/usr/bin/python3 -m http.server 8080 --directory /home/pi/navamesh-updates
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

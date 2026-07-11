@@ -309,6 +309,7 @@ class FarmApp(App):
                 pass
         self._start_service()
         self._start_auto_announces()
+        self._start_update_checker()
 
     def _ensure_hthd01_config(self) -> bool:
         """Persist the HT-HD01 UDP interface into Sideband's RNS config template
@@ -825,6 +826,99 @@ class FarmApp(App):
             self._auto_announce_tick, self._auto_announce_first_delay)
         self._announce_ev = Clock.schedule_interval(
             self._auto_announce_tick, self._auto_announce_interval)
+
+    # ── Over-the-air updates (wrapper-only; see farmui/updater.py) ────────────
+    # First check shortly after backend bring-up (the Wi-Fi/LAN is settling),
+    # then every 6 hours. All checks/downloads run off the UI thread; only the
+    # Talk-screen card is touched from Kivy's clock. Class-level None defaults
+    # so __new__-constructed test apps see the attributes.
+    _update_check_first_delay = 30.0
+    _update_check_interval = 6 * 3600.0
+    _update_ev = None
+    _update_info = None
+    _update_in_progress = False
+
+    def _start_update_checker(self):
+        if self._update_ev is not None:
+            return
+        # Bind the PackageInstaller status listener HERE, on the main thread —
+        # binding from the install worker thread throws ClassNotFoundException
+        # (jnius proxies need the main thread's class loader). No-op on desktop.
+        try:
+            from . import updater
+            updater.ensure_intent_binding()
+        except Exception:
+            pass
+        Clock.schedule_once(self._update_check_tick, self._update_check_first_delay)
+        self._update_ev = Clock.schedule_interval(
+            self._update_check_tick, self._update_check_interval)
+
+    def _update_check_tick(self, _dt):
+        if self._update_in_progress:
+            return
+        threading.Thread(target=self._check_update_worker, daemon=True).start()
+
+    def _check_update_worker(self):
+        """Background: poll update hosts; surface the card when one is newer."""
+        try:
+            from . import updater
+            urls = self._settings.update_urls
+            installed = updater.installed_version()
+            info = updater.check_for_update(urls, installed)
+        except Exception:
+            return
+        if info:
+            self._update_info = info
+            Clock.schedule_once(
+                lambda _: self._str_screen.show_update(
+                    info["version"], self.apply_update), 0)
+
+    def apply_update(self):
+        """Farmer tapped the update card: download the APK and hand it to the
+        system installer. Runs in a worker thread; card text shows progress."""
+        if self._update_in_progress or not self._update_info:
+            return
+        from . import updater
+        if not updater.can_request_installs():
+            # One-time Android toggle. Send them to the exact settings screen;
+            # the card stays so they can tap again after allowing.
+            self._str_screen.set_update_status(
+                "Allow updates on the next screen, then tap again", enabled=True)
+            updater.open_install_permission_settings()
+            return
+        self._update_in_progress = True
+        self._str_screen.set_update_status("Downloading update…")
+        threading.Thread(target=self._apply_update_worker, daemon=True).start()
+
+    def _apply_update_worker(self):
+        from . import updater
+        try:
+            dest = os.path.join(self.user_data_dir, "updates", "navamesh_update.apk")
+            updater.download_apk(self._update_info["apk_url"], dest)
+            Clock.schedule_once(
+                lambda _: self._str_screen.set_update_status("Installing…"), 0)
+            updater.install_apk(dest, on_status=self._on_install_status)
+        except Exception as exc:
+            msg = "Update failed — tap to retry"
+            try:
+                import RNS
+                RNS.log(f"Navamesh: update failed: {exc}", RNS.LOG_ERROR)
+            except Exception:
+                pass
+            Clock.schedule_once(
+                lambda _: self._str_screen.set_update_status(msg, enabled=True), 0)
+        finally:
+            self._update_in_progress = False
+
+    def _on_install_status(self, status: int):
+        """Final PackageInstaller outcome (0 = success). On success the process
+        is about to be replaced by the new build, so there is nothing to do;
+        a cancelled/failed install re-arms the card so the farmer can retry."""
+        if status == 0:
+            return
+        Clock.schedule_once(
+            lambda _: self._str_screen.set_update_status(
+                "Update cancelled — tap to retry", enabled=True), 0)
 
     def _restore_gateway(self):
         """Re-pin the saved farm gateway from farmui settings, if one exists.

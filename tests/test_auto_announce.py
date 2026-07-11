@@ -99,5 +99,10 @@ def test_start_backend_kicks_off_auto_announces(monkeypatch):
     app._ensure_hthd01_config = lambda: False
     app._start_service = lambda: None
     app._start_backend(0)
-    assert len(fake.intervals) == 1
-    assert len(fake.once) == 1
+    # Backend bring-up schedules exactly two timer pairs: the auto-announce
+    # (240s interval) and the over-the-air update checker (6h interval).
+    announce = [(cb, t) for cb, t in fake.intervals if cb == app._auto_announce_tick]
+    update = [(cb, t) for cb, t in fake.intervals if cb == app._update_check_tick]
+    assert len(announce) == 1 and len(update) == 1
+    assert len(fake.intervals) == 2
+    assert len(fake.once) == 2   # first announce + first update check

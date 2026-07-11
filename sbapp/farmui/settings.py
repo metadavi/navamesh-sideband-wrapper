@@ -15,6 +15,7 @@ _DEFAULT = {
     "gateway_display_name": None,
     "node_cache":           [],
     "peer_aliases":         {},
+    "update_urls":          None,   # None → updater's DEFAULT_UPDATE_URLS
     "dev_mode":             False,
 }
 
@@ -98,6 +99,24 @@ class FarmSettings:
     def clear_gateway(self):
         self._data["gateway_hash"]         = None
         self._data["gateway_display_name"] = None
+        self._save()
+
+    # ── Over-the-air update sources (wrapper-only) ──────────────────────────
+    # Base URLs polled for version.json (see farmui/updater.py). None/empty
+    # means "use the built-in default" (the farm Pi's conventional address),
+    # so shipping a new default in an update takes effect without touching
+    # phones that never customised the list.
+    @property
+    def update_urls(self) -> list[str]:
+        urls = self._data.get("update_urls")
+        if not urls:
+            from .updater import DEFAULT_UPDATE_URLS
+            return list(DEFAULT_UPDATE_URLS)
+        return [str(u) for u in urls]
+
+    @update_urls.setter
+    def update_urls(self, value):
+        self._data["update_urls"] = list(value) if value else None
         self._save()
 
     @property

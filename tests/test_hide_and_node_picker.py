@@ -31,8 +31,11 @@ def _settings_in_tmp():
 def test_stream_source_has_no_hide():
     from sbapp.farmui.screens import stream as stream_mod
     src = inspect.getsource(stream_mod)
-    assert "Hide" not in src and "hide" not in src, (
-        "the Talk list must not carry any Hide control or plumbing")
+    # No Hide button, callback plumbing, or hide-contact wiring anywhere.
+    # ("hide_update" — collapsing the OTA update card — is unrelated and fine.)
+    assert "Hide" not in src, "the Talk list must not carry a Hide control"
+    for gone in ("on_hide", "_hide_btn", "hide_contact", "_fire_hide"):
+        assert gone not in src, f"stale Hide plumbing: {gone}"
     assert "on_hide" not in inspect.signature(
         stream_mod.AnnounceRow.__init__).parameters
 

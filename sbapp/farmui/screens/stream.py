@@ -21,7 +21,7 @@ from ..theme import (
     SCREEN_PADDING, SPACE_XS, SPACE_SM, SPACE_MD,
     ROW_HEIGHT, CARD_RADIUS, HAIRLINE_WIDTH,
 )
-from ..widgets import EmptyState, SectionHeading
+from ..widgets import EmptyState, SectionHeading, BigButton
 # Re-exported for backward compatibility; the canonical helper now lives in
 # farmui.devices so the gateway/peer rule has a single home.
 from ..devices import is_gateway_device, GATEWAY_DISPLAY_NAME  # noqa: F401
@@ -151,6 +151,9 @@ class StreamScreen(BoxLayout):
                          spacing=dp(SPACE_MD), **kwargs)
         self._app = app
         self._rows = {}
+        # Over-the-air update card (hidden until an update is found).
+        self._update_btn = None
+        self._update_cb = None
 
         self.add_widget(SectionHeading("[font=emoji]💬[/font]  Nearby devices"))
 
@@ -205,3 +208,40 @@ class StreamScreen(BoxLayout):
         self._list.clear_widgets()
         self._list.add_widget(self._empty)
         self._rows.clear()
+
+    # ── Over-the-air update card ─────────────────────────────────────────────
+
+    def show_update(self, version: str, on_install):
+        """Show (or refresh) the 'update available' card above the device list.
+
+        Idempotent per poll — repeated calls just update the label/callback.
+        The card is deliberately farmer-simple: one big tap target.
+        """
+        self._update_cb = on_install
+        label = f"Update available (v{version}) — tap to install"
+        if self._update_btn is None:
+            btn = BigButton(icon="⬇", label=label, variant="primary")
+            btn.size_hint_y = None
+            btn.bind(on_release=lambda *_: self._fire_update())
+            # Insert directly under the heading (widget index counts from the
+            # bottom in Kivy, so len(children)-1 places it right below it).
+            self.add_widget(btn, index=len(self.children) - 1)
+            self._update_btn = btn
+        else:
+            self._update_btn.text = f"[font=emoji]⬇[/font]  {label}"
+
+    def _fire_update(self):
+        if self._update_cb is not None:
+            self._update_cb()
+
+    def set_update_status(self, text: str, enabled: bool = False):
+        """Progress feedback on the card itself (e.g. 'Downloading update…')."""
+        if self._update_btn is not None:
+            self._update_btn.text = text
+            self._update_btn.disabled = not enabled
+
+    def hide_update(self):
+        if self._update_btn is not None:
+            self.remove_widget(self._update_btn)
+            self._update_btn = None
+            self._update_cb = None
