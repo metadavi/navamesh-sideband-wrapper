@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User=pi
-ExecStart=/usr/bin/python3 -m http.server 8080 --directory /home/pi/navamesh-updates
+ExecStart=/usr/bin/python3 -m http.server 8090 --directory /home/pi/navamesh-updates
 Restart=always
 RestartSec=5
 

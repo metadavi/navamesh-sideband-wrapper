@@ -29,7 +29,10 @@ import urllib.request
 # HT-HD01 subnet (the phones already live on 192.168.100.x — their RNS UDP
 # interface broadcasts to 192.168.100.255). Overridable per phone via the
 # update_urls list in farmui_settings.json.
-DEFAULT_UPDATE_URLS = ["http://192.168.100.10:8080"]
+# Port 8090 (not 8080): the Pi's farm Docker stack already serves map tiles on
+# 8080 (the navamesh_tiles nginx container), so the OTA update server runs on
+# 8090 to avoid the conflict.
+DEFAULT_UPDATE_URLS = ["http://192.168.100.10:8090"]
 
 # Short timeouts: the check runs periodically in the background and must fail
 # fast when the phone is off-farm / the Pi is down.
