@@ -1092,8 +1092,9 @@ class FarmApp(App):
         # Reflect the sent message promptly (it's saved to the shared DB).
         self._poll_peer_messages()
 
-    def dispatch_command(self, cmd_key: str, node_id: str | None = None, on_complete=None):
-        wire = get_wire(cmd_key, node_id)
+    def dispatch_command(self, cmd_key: str, node_id: str | None = None, on_complete=None,
+                         value: int | None = None):
+        wire = get_wire(cmd_key, node_id, value)
         if self.sideband and self._gateway_hash:
             threading.Thread(
                 target=self._send_and_show,
@@ -1150,11 +1151,31 @@ class FarmApp(App):
         on_pick(cmd_key, node_id) is invoked only when the farmer taps a node;
         closing/cancelling sends nothing. If no nodes are cached, the dialog
         shows a friendly hint and only a Close button.
+
+        For control commands the picker also offers "ALL FIELD NODES", and picking a
+        target still sends nothing — the caller routes it to the confirmation dialog.
         """
         from .widgets import NodePickerDialog
+        is_write = getattr(cmd, "is_write", False)
         NodePickerDialog(
             nodes=list(self._node_cache),
             on_pick=lambda node_id: on_pick(cmd.key, node_id),
+            heading=f"{cmd.label} — pick a target" if is_write else "Pick a node to map",
+            include_broadcast=is_write,
+        ).open()
+
+    def open_command_confirm(self, cmd, node_id, on_confirm):
+        """Open the value-then-confirm dialog for a control command.
+
+        on_confirm(cmd_key, node_id, value) fires only from the dialog's Send button, so
+        cancelling at either step transmits nothing.
+        """
+        from .widgets import ConfirmCommandDialog
+        ConfirmCommandDialog(
+            cmd=cmd,
+            node_id=node_id,
+            node_label=node_id,
+            on_confirm=lambda value: on_confirm(cmd.key, node_id, value),
         ).open()
 
 

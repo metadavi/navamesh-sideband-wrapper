@@ -606,7 +606,8 @@ class NodePickerDialog:
     language as the rest of the Field-Log UI.
     """
 
-    def __init__(self, nodes, on_pick):
+    def __init__(self, nodes, on_pick, heading="Pick a node to map",
+                 include_broadcast=False):
         from kivy.uix.modalview import ModalView
         from kivy.uix.scrollview import ScrollView
 
@@ -619,7 +620,16 @@ class NodePickerDialog:
         )
         panel = Panel(padding=dp(theme.SPACE_MD), spacing=dp(theme.SPACE_MD))
 
-        panel.add_widget(SectionHeading("Pick a node to map"))
+        panel.add_widget(SectionHeading(heading))
+
+        # Control commands can address the whole mesh at once, which also happens to be
+        # the only way to reach a node that sits outside direct gateway range (sensor
+        # nodes do not rebroadcast for each other). Offered only when the caller asks,
+        # so "Map — one node" keeps its single-node meaning.
+        if include_broadcast:
+            all_btn = BigButton(icon="📡", label="ALL FIELD NODES", variant="command")
+            all_btn.bind(on_release=lambda *_: self._choose("^all"))
+            panel.add_widget(all_btn)
 
         if nodes:
             scroll = ScrollView(size_hint=(1, 1))
@@ -655,6 +665,148 @@ class NodePickerDialog:
         self._modal.dismiss()
         if self._on_pick is not None:
             self._on_pick(node_id)
+
+    def open(self):
+        self._modal.open()
+
+
+class ConfirmCommandDialog:
+    """Value picker + confirmation for a control command.
+
+    Control commands change deployed field hardware over LoRa, unlike the nine read-only
+    commands which just query the Pi's database. So this dialog exists to put a
+    deliberate second step in front of them: nothing is sent until the farmer taps
+    "Send".
+
+    Values are offered as presets rather than a text field. That keeps the "no typing
+    anywhere" rule the rest of this UI follows, and it makes an out-of-range value
+    impossible to enter rather than merely rejected afterwards.
+
+    Flow:
+      needs_value  → pick a preset, then confirm
+      otherwise    → confirm directly
+
+    `on_confirm(value)` is invoked ONLY from _send(). Cancelling or dismissing sends
+    nothing.
+    """
+
+    def __init__(self, cmd, node_id, on_confirm, node_label=None):
+        from kivy.uix.modalview import ModalView
+        from kivy.uix.scrollview import ScrollView
+
+        self._cmd = cmd
+        self._node_id = node_id
+        self._on_confirm = on_confirm
+        self._node_label = node_label or node_id
+        self._value = None
+
+        self._modal = ModalView(
+            size_hint=(0.9, 0.8),
+            background_color=(0, 0, 0, 0.55),
+            background="",
+            auto_dismiss=True,
+        )
+        self._scroll = ScrollView(size_hint=(1, 1))
+        self._panel = Panel(padding=dp(theme.SPACE_MD), spacing=dp(theme.SPACE_MD))
+        self._modal.add_widget(self._panel)
+
+        if cmd.needs_value and cmd.value_presets:
+            self._build_value_step()
+        else:
+            self._build_confirm_step()
+
+    # ── steps ────────────────────────────────────────────────────────────────
+
+    def _clear(self):
+        self._panel.clear_widgets()
+
+    def _is_broadcast(self):
+        return self._node_id in ("^all", "all")
+
+    def _target_text(self):
+        return "ALL FIELD NODES" if self._is_broadcast() else self._node_label
+
+    def _hint_label(self, text, color=None):
+        lbl = Label(
+            text=text,
+            font_size=sp(theme.FONT_BODY),
+            color=get_color_from_hex(color or theme.COLOR_MUTED),
+            halign="center", valign="middle",
+            **_body(),
+        )
+        lbl.bind(size=lambda i, _s: setattr(i, "text_size", i.size))
+        return lbl
+
+    def _build_value_step(self):
+        self._clear()
+        self._panel.add_widget(SectionHeading(f"{self._cmd.label} — choose"))
+        self._panel.add_widget(self._hint_label(
+            f"For {self._target_text()}\n{self._cmd.confirm_hint}"
+        ))
+
+        from kivy.uix.scrollview import ScrollView
+        scroll = ScrollView(size_hint=(1, 1))
+        col = BoxLayout(orientation="vertical", size_hint_y=None,
+                        spacing=dp(theme.SPACE_SM))
+        col.bind(minimum_height=col.setter("height"))
+        for label, value in self._cmd.value_presets:
+            btn = BigButton(icon=self._cmd.icon, label=label, variant="command")
+            btn.bind(on_release=lambda _b, v=value: self._pick_value(v))
+            col.add_widget(btn)
+        scroll.add_widget(col)
+        self._panel.add_widget(scroll)
+
+        cancel = BigButton(label="Cancel", variant="command")
+        cancel.size_hint_y = None
+        cancel.bind(on_release=lambda *_: self._modal.dismiss())
+        self._panel.add_widget(cancel)
+
+    def _pick_value(self, value):
+        # Choosing a value does NOT send; it advances to the confirmation step.
+        self._value = value
+        self._build_confirm_step()
+
+    def _summary(self):
+        cmd = self._cmd
+        if cmd.needs_value:
+            unit = cmd.value_label.lower()
+            return f"{cmd.label}: {self._value} {unit}"
+        return cmd.label
+
+    def _build_confirm_step(self):
+        self._clear()
+        self._panel.add_widget(SectionHeading("Confirm"))
+
+        # Broadcasts get starker wording: one tap would otherwise reconfigure every
+        # deployed node at once.
+        if self._is_broadcast():
+            self._panel.add_widget(self._hint_label(
+                f"{self._summary()}\n\nThis affects ALL FIELD NODES.",
+                color=theme.COLOR_MESA_RED,
+            ))
+        else:
+            self._panel.add_widget(self._hint_label(
+                f"{self._summary()}\n\nNode: {self._node_label}"
+            ))
+
+        if self._cmd.confirm_hint:
+            self._panel.add_widget(self._hint_label(self._cmd.confirm_hint))
+
+        send = BigButton(icon="📤", label="Send", variant="command")
+        send.size_hint_y = None
+        send.bind(on_release=lambda *_: self._send())
+        self._panel.add_widget(send)
+
+        cancel = BigButton(label="Cancel", variant="command")
+        cancel.size_hint_y = None
+        cancel.bind(on_release=lambda *_: self._modal.dismiss())
+        self._panel.add_widget(cancel)
+
+    def _send(self):
+        # The ONLY path that dispatches a control command.
+        self._modal.dismiss()
+        if self._on_confirm is not None:
+            self._on_confirm(self._value)
 
     def open(self):
         self._modal.open()

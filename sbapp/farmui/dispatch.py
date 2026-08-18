@@ -118,8 +118,9 @@ class LxmfDirectDispatcher(AbstractDispatcher):
         node_id: Optional[str] = None,
         on_reply: Optional[Callable[[CommandReply], None]] = None,
         timeout: float = 30.0,
+        value: Optional[int] = None,
     ) -> CommandReply:
-        wire = get_wire(cmd_key, node_id)
+        wire = get_wire(cmd_key, node_id, value)
         gw_hash = bytes.fromhex(gateway_hash_hex)
         identity = RNS.Identity.recall(gw_hash)
         if identity is None:
@@ -178,8 +179,9 @@ class CoreDispatcher(AbstractDispatcher):
         node_id: Optional[str] = None,
         on_reply: Optional[Callable[[CommandReply], None]] = None,
         timeout: float = 30.0,
+        value: Optional[int] = None,
     ) -> CommandReply:
-        wire = get_wire(cmd_key, node_id)
+        wire = get_wire(cmd_key, node_id, value)
         dest_hash = bytes.fromhex(gateway_hash_hex)
         try:
             self._core.send_message(

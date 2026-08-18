@@ -15,6 +15,44 @@ Cross-reference to `~/Desktop/Navamesh-main/src/navamesh/reticulum_bridge.py`
 | `help` | `"help"` | `HELP_TEXT` constant (lists all commands) | None | 351–360, 551 |
 | unknown | any unrecognized string | `"Unknown command: '...'\n\n{HELP_TEXT}"` | None | 604 |
 
+## Control commands (write)
+
+These change deployed field hardware, unlike everything above. The wrapper requires a
+value-then-confirm dialog before dispatching one.
+
+The gateway currently accepts control commands from **any** sender that can reach it:
+`AUTHORIZED_FARMER_HASHES` is empty for testing and first deployment. Setting it restricts
+access with no code change (see the Pi repo's `TODO.md`). The `unauthorized` row below
+therefore only applies once that variable is populated.
+
+| Command | Input | Response shape | Notes |
+|---------|-------|----------------|-------|
+| `ble` | `ble <!id\|^all> <minutes>` | `"📤 Queued: Bluetooth window for N min → …"` then a later ack | 1–240 minutes |
+| `interval` | `interval <!id\|^all> <seconds>` | `"📤 Queued: telemetry interval N s → …"` then a later ack | 300–86400 seconds |
+| `quiet` | `quiet <!id\|^all> on\|off` | `"📤 Queued: quiet mode ON/OFF → …"` then a later ack | auto-resumes within 3 days |
+| unauthorized | any of the above | `"Unauthorized: this gateway does not accept control commands from you."` | nothing is transmitted |
+| bad value | e.g. `ble !x 999` | `"⚠️  …must be …"` | rejected before transmit |
+| unknown node | e.g. `ble !nope 15` | `"Node '!nope' not found. …"` | rejected before transmit |
+
+### Asynchronous outcome
+
+Unlike the read verbs, that reply is **not** the final answer — it only confirms the
+command was queued. The node's acknowledgement travels back over LoRa (PortNum 259) and
+arrives as a **second, later LXMF message**:
+
+- `"✅ <node> applied <verb> = <value>"` — confirmed, reporting what the node actually
+  applied after its own clamping.
+- `"⏱ <node> did not acknowledge <verb> within Ns…"` — no ack in time. Sensor nodes do not
+  rebroadcast for each other, so a node outside direct gateway range is only reachable
+  via `^all`.
+- `"❌ <node> rejected <verb>…"` / `"⚠️ <verb> → <node> failed: …"`
+
+The wrapper needs no new code for these: `app._poll_gateway_replies` already renders any
+new inbound message from the pinned gateway, and `add_result` appends rather than replaces.
+
+An **unsolicited** ack also exists: when a node's quiet mode self-expires it reports
+`command_id = 0`, and the bridge logs that the node resumed on its own.
+
 ## Message routing
 
 - Command is read from `message.content` (UTF-8); falls back to `message.title` (same as bridge line 645–646).

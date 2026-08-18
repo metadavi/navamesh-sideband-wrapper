@@ -142,7 +142,17 @@ HELP_TEXT = """🌱 Navamesh Gateway — Commands
   map          — rendered map image (all nodes)
   map <id>     — rendered map image (one node)
   nodes        — list all known node IDs
-  help         — this message"""
+  help         — this message
+
+Control commands (change the field nodes):
+  ble <id|^all> <min>      — open a Bluetooth window, then auto-close
+  interval <id|^all> <sec> — set telemetry interval (live, no reboot)
+  quiet <id|^all> on|off   — stop / resume transmitting"""
+
+# The stub treats every sender as authorized and never touches a radio. The real
+# gateway's allow-list and bounds checks are covered by the Pi repo's
+# tests/test_handle_write_command.py; duplicating them here would only test the stub.
+STUB_CMD_ID = 12345
 
 
 def _make_stub_jpeg() -> bytes:
@@ -182,6 +192,26 @@ def handle_command(cmd: str, nodes: dict):
     if command == "battery":  return fmt_battery(nodes), None
     if command == "position": return fmt_position(nodes), None
     if command == "link":     return fmt_link(nodes), None
+
+    if command in ("ble", "interval", "quiet"):
+        bits = (target or "").split()
+        node = bits[0] if bits else None
+        arg  = bits[1] if len(bits) > 1 else None
+        if not node or arg is None:
+            return f"⚠️  '{command}' needs a target and a value.", None
+        if node not in ("^all", "all") and node not in nodes:
+            return f"Node '{node}' not found. Send 'nodes' to list all known nodes.", None
+        who = "ALL field nodes" if node in ("^all", "all") else node
+        if command == "quiet":
+            if arg not in ("on", "off"):
+                return "quiet needs 'on' or 'off'. Example: quiet ^all on", None
+            what = f"quiet mode {arg.upper()}"
+        elif command == "ble":
+            what = f"Bluetooth window for {arg} min"
+        else:
+            what = f"telemetry interval {arg} s"
+        return (f"📤 Queued: {what} → {who}\n"
+                f"Command {STUB_CMD_ID}. Waiting for the node to acknowledge…"), None
 
     if command == "map":
         if target:

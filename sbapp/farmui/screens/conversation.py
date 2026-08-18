@@ -159,14 +159,32 @@ class ConversationScreen(BoxLayout):
             # The node picker may be cancelled, so don't lock the UI or show the
             # "Waiting…" card yet — only _run_command (fired when a node is
             # actually chosen) commits to a send. The modal blocks double-taps.
-            self._app.open_node_picker(cmd, on_pick=self._run_command)
+            #
+            # Control commands get one more hop: picking a target opens the
+            # value/confirm dialog rather than sending, because these reconfigure
+            # deployed hardware instead of just querying the database.
+            if getattr(cmd, "is_write", False):
+                self._app.open_node_picker(cmd, on_pick=self._confirm_write)
+            else:
+                self._app.open_node_picker(cmd, on_pick=self._run_command)
             return
         self._run_command(cmd.key)
 
-    def _run_command(self, cmd_key, node_id=None):
+    def _confirm_write(self, cmd_key, node_id=None):
+        """A target was chosen for a control command — confirm before anything is sent."""
+        from ..command_registry import get_command
+        if self._in_flight:
+            return
+        self._app.open_command_confirm(
+            get_command(cmd_key), node_id, on_confirm=self._run_command
+        )
+
+    def _run_command(self, cmd_key, node_id=None, value=None):
         self._in_flight = True
         self._set_buttons_enabled(False)
         # Replace the previous reply the moment a new command is sent.
         self._clear_results()
         self._show_waiting()
-        self._app.dispatch_command(cmd_key, node_id, on_complete=self._on_command_done)
+        self._app.dispatch_command(
+            cmd_key, node_id, on_complete=self._on_command_done, value=value
+        )

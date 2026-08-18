@@ -14,9 +14,21 @@ os.environ["DISPLAY"] = ""  # prevent SDL2 from trying real display
 
 
 def test_command_registry_count():
-    """Exactly 9 commands defined."""
+    """
+    9 read commands plus 4 write commands.
+
+    Split by kind rather than asserting one total, so that accidentally adding a command
+    that mutates field hardware fails here even if the total happens to look right. Write
+    commands require a confirmation step and gateway authorization; read commands do not.
+    """
     from sbapp.farmui.command_registry import COMMANDS
-    assert len(COMMANDS) == 9
+    reads = [c for c in COMMANDS if not c.is_write]
+    writes = [c for c in COMMANDS if c.is_write]
+    assert len(reads) == 9
+    assert len(writes) == 4
+    assert {c.key for c in writes} == {
+        "ble_window", "set_interval", "quiet_on", "quiet_off",
+    }
 
 
 def test_command_wire_strings():
