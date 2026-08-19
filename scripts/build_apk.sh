@@ -48,6 +48,25 @@ if [ -z "${CONTAINER_CMD:-}" ]; then
 fi
 echo "Container runtime: $CONTAINER_CMD"
 
+# SELinux MCS: podman labels each container with a unique category pair (e.g.
+# container_file_t:s0:c189,c244) and files it writes inherit it. A LATER
+# container gets different categories and is then denied access to those files
+# -- MCS isolation working as designed, but fatal here because every step of
+# this build shares the same volumes. It shows up as a baffling EACCES where
+# root owns the file, has CAP_DAC_OVERRIDE, the mode is 644, and `ls` works
+# but `rm` does not. p4a hits it in recipes that clear their build dir
+# (lxst_recipe's prepare_build_dir does `rm -rf`), so the build dies on the
+# second pass, not the first.
+#
+# Disabling label separation for these containers is the standard fix and is
+# appropriate for a local build container operating only on its own volumes.
+# Empty on docker, so macOS is unaffected. Unquoted on use so the empty case
+# expands to nothing under `set -u`.
+CONTAINER_SECOPT=""
+if [ "$CONTAINER_CMD" = "podman" ]; then
+  CONTAINER_SECOPT="--security-opt label=disable"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SBAPP_DIR="$ROOT_DIR/sbapp"
@@ -125,7 +144,7 @@ echo "--- Seeding stable debug keystore into '$ANDROID_VOLUME' (container cp) --
 cleanup
 # The volume mounts at /home/user/.android, so that directory already exists and
 # docker cp (streams through the Docker API, no VirtioFS) lands the file inside it.
-"$CONTAINER_CMD" create --name "$HELPER" -v "$ANDROID_VOLUME:/home/user/.android" "$IMAGE" > /dev/null
+"$CONTAINER_CMD" create $CONTAINER_SECOPT --name "$HELPER" -v "$ANDROID_VOLUME:/home/user/.android" "$IMAGE" > /dev/null
 "$CONTAINER_CMD" cp "$KEYSTORE_FILE" "$HELPER:/home/user/.android/debug.keystore"
 "$CONTAINER_CMD" rm "$HELPER" > /dev/null
 echo "Seeded debug.keystore (stable signer)"
@@ -137,14 +156,14 @@ echo ""
 echo "--- Loading source into '$SRC_VOLUME' (container cp) ---"
 cleanup
 # Wipe the volume, then create a stopped helper that holds it.
-"$CONTAINER_CMD" run --rm -v "$SRC_VOLUME:/dst" --entrypoint bash "$IMAGE" \
+"$CONTAINER_CMD" run $CONTAINER_SECOPT --rm -v "$SRC_VOLUME:/dst" --entrypoint bash "$IMAGE" \
   -c 'rm -rf /dst/* /dst/.[!.]* /dst/..?* 2>/dev/null; true'
-"$CONTAINER_CMD" create --name "$HELPER" -v "$SRC_VOLUME:/home/user/hostcwd" "$IMAGE" > /dev/null
+"$CONTAINER_CMD" create $CONTAINER_SECOPT --name "$HELPER" -v "$SRC_VOLUME:/home/user/hostcwd" "$IMAGE" > /dev/null
 "$CONTAINER_CMD" cp "$SBAPP_DIR"   "$HELPER:/home/user/hostcwd/"
 "$CONTAINER_CMD" cp "$RECIPES_DIR" "$HELPER:/home/user/hostcwd/"
 "$CONTAINER_CMD" cp "$LIBS_DIR"    "$HELPER:/home/user/hostcwd/"
 # Drop any stale build/output dirs that rode along inside sbapp/.
-"$CONTAINER_CMD" run --rm -v "$SRC_VOLUME:/dst" --entrypoint bash "$IMAGE" \
+"$CONTAINER_CMD" run $CONTAINER_SECOPT --rm -v "$SRC_VOLUME:/dst" --entrypoint bash "$IMAGE" \
   -c 'rm -rf /dst/sbapp/.buildozer /dst/sbapp/bin 2>/dev/null; true'
 "$CONTAINER_CMD" rm "$HELPER" > /dev/null
 echo ""
@@ -157,7 +176,7 @@ echo ""
 # This pre-step injects a get_python_root shim into p4a's TargetPythonRecipe if
 # p4a is already cloned.  The Dockerfile wrapper handles the fresh-clone case.
 echo "--- Patching p4a TargetPythonRecipe (get_python_root shim) ---"
-"$CONTAINER_CMD" run --rm \
+"$CONTAINER_CMD" run $CONTAINER_SECOPT --rm \
   --platform linux/amd64 \
   -v "$BUILD_VOLUME:/home/user/hostcwd/sbapp/.buildozer" \
   --entrypoint python3 \
@@ -172,7 +191,7 @@ echo ""
 # This step mirrors what the recipe does: run ensurepip --root site_root if pip
 # is not already importable from site_dir.
 echo "--- Bootstrapping hostpython3 pip (if needed) ---"
-"$CONTAINER_CMD" run --rm \
+"$CONTAINER_CMD" run $CONTAINER_SECOPT --rm \
   --platform linux/amd64 \
   -v "$BUILD_VOLUME:/home/user/hostcwd/sbapp/.buildozer" \
   --entrypoint sh \
@@ -223,7 +242,7 @@ echo ""
 #   2. _sdl_common bootstrap template — picked up on a fresh first build
 #      (becomes src/res_initial on that first run)
 _inject_bootstrap_device_filter() {
-  "$CONTAINER_CMD" run --rm \
+  "$CONTAINER_CMD" run $CONTAINER_SECOPT --rm \
     --platform linux/amd64 \
     -v "$SRC_VOLUME:/src" \
     -v "$BUILD_VOLUME:/home/user/hostcwd/sbapp/.buildozer" \
@@ -262,7 +281,7 @@ echo ""
 # so packageDebug re-runs and signs with the seeded keystore.  (Native libs, dex
 # and merged resources are untouched, so this is a fast re-package, not a rebuild.)
 echo "--- Clearing cached debug APK so it re-signs with the stable keystore ---"
-"$CONTAINER_CMD" run --rm \
+"$CONTAINER_CMD" run $CONTAINER_SECOPT --rm \
   --platform linux/amd64 \
   -v "$BUILD_VOLUME:/home/user/hostcwd/sbapp/.buildozer" \
   --entrypoint sh "$IMAGE" -c '
@@ -277,7 +296,7 @@ echo ""
 # template and retry exactly once (all recipes are cached so the retry is fast).
 echo "--- Building APK ---"
 BUILD_STATUS=0
-"$CONTAINER_CMD" run --rm \
+"$CONTAINER_CMD" run $CONTAINER_SECOPT --rm \
   --platform linux/amd64 \
   -v "$SRC_VOLUME:/home/user/hostcwd" \
   -v "$CACHE_VOLUME:/home/user/.buildozer" \
@@ -293,7 +312,7 @@ if [ "$BUILD_STATUS" -ne 0 ]; then
   _inject_bootstrap_device_filter
   echo ""
   echo "--- Building APK (retry) ---"
-  "$CONTAINER_CMD" run --rm \
+  "$CONTAINER_CMD" run $CONTAINER_SECOPT --rm \
     --platform linux/amd64 \
     -v "$SRC_VOLUME:/home/user/hostcwd" \
     -v "$CACHE_VOLUME:/home/user/.buildozer" \
@@ -308,7 +327,7 @@ fi
 # --- Step 3: copy the finished APK back out via docker cp ---------------------
 echo ""
 echo "=== Build complete — copying APK to dist/ ==="
-APK_IN_VOL=$("$CONTAINER_CMD" run --rm -v "$SRC_VOLUME:/v" --entrypoint bash "$IMAGE" \
+APK_IN_VOL=$("$CONTAINER_CMD" run $CONTAINER_SECOPT --rm -v "$SRC_VOLUME:/v" --entrypoint bash "$IMAGE" \
   -c 'find /v/sbapp/bin -name "*.apk" 2>/dev/null | head -1')
 if [ -z "$APK_IN_VOL" ]; then
   echo "ERROR: No APK found in sbapp/bin/ after build."
@@ -318,7 +337,7 @@ APK_BASENAME=$(basename "$APK_IN_VOL")
 APK_NAME=$(echo "$APK_BASENAME" | sed 's/^sideband/navamesh-farm/')
 HELPER_PATH="/home/user/hostcwd/sbapp/bin/$APK_BASENAME"
 
-"$CONTAINER_CMD" create --name "$HELPER" -v "$SRC_VOLUME:/home/user/hostcwd" "$IMAGE" > /dev/null
+"$CONTAINER_CMD" create $CONTAINER_SECOPT --name "$HELPER" -v "$SRC_VOLUME:/home/user/hostcwd" "$IMAGE" > /dev/null
 "$CONTAINER_CMD" cp "$HELPER:$HELPER_PATH" "$DIST_DIR/$APK_NAME"
 "$CONTAINER_CMD" rm "$HELPER" > /dev/null
 
