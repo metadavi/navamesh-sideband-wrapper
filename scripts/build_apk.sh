@@ -302,3 +302,80 @@ docker rm "$HELPER" > /dev/null
 
 echo "APK: $DIST_DIR/$APK_NAME"
 ls -lh "$DIST_DIR/$APK_NAME"
+
+# --- Step 4: verify no host-arch cryptography got bundled ----------------------
+# A COLD build silently poisons the APK: `cryptography` is a transitive dep
+# (lxst -> rns -> cryptography>=3.4.7), p4a's pip step runs under an x86_64
+# hostpython3, so pip resolves the HOST wheel and p4a packages an x86_64
+# _rust.abi3.so into an arm64 APK. The backend service dlopen()s it and dies
+# before RNS initialises, while the UI process survives -- so the app looks
+# perfectly healthy and the radio is completely dead. Warm-cache builds never
+# pull the wheel, which is why this appears only after a prune.
+#
+# sbapp/blacklist.txt is supposed to keep it out. This gate proves it did.
+# Checked here rather than trusted, because the failure is invisible on device
+# without opening the Debug tab.
+echo ""
+echo "=== Verifying APK does not contain host-arch cryptography ==="
+# NOTE: `set -e` is active, so this must not be a bare command -- a non-zero
+# exit would abort the script before VERIFY_STATUS could be read.
+VERIFY_STATUS=0
+python3 - "$DIST_DIR/$APK_NAME" <<'PY' || VERIFY_STATUS=$?
+import io, sys, tarfile, zipfile
+
+apk = sys.argv[1]
+member = "lib/arm64-v8a/libpybundle.so"
+try:
+    blob = zipfile.ZipFile(apk).read(member)
+    names = tarfile.open(fileobj=io.BytesIO(blob)).getnames()
+except Exception as exc:
+    print(f"FAIL: could not read {member} from the APK: {type(exc).__name__}: {exc}")
+    sys.exit(1)
+
+# The site-packages live in libpybundle.so. Do NOT look in assets/private.tar --
+# that holds app code only and has no RNS in it at all.
+bundled = [n for n in names if "site-packages/cryptography" in n]
+fallback = [n for n in names if "RNS/Cryptography" in n]
+
+if bundled:
+    print(f"FAIL: {len(bundled)} host-arch cryptography entries are bundled, e.g.:")
+    for n in bundled[:3]:
+        print(f"   {n}")
+    print("\nThe backend service will die in dlopen() and the radio will be dead")
+    print("while the UI still launches. Confirm on device via the Debug tab")
+    print('(set "dev_mode": true in farmui_settings.json).')
+    print("\nCheck that sbapp/buildozer.spec still has:")
+    print("   android.blacklist_src = blacklist.txt")
+    print("and that sbapp/blacklist.txt contains cryptography/* -- note it")
+    print("REPLACES p4a's built-in blacklist, so p4a's defaults must be in it too.")
+    sys.exit(1)
+
+if not fallback:
+    # This is a liveness check on the blacklist, not a check on current behaviour.
+    # The pattern in sbapp/blacklist.txt is safe as written -- fnmatch is
+    # case-sensitive, so "*/cryptography/*" cannot match RNS/Cryptography/.
+    # But that file REPLACES p4a's built-in blacklist and has to be resynced
+    # whenever p4a's defaults change, so it will get edited again. Broadening a
+    # pattern (*crypto*, or adding a capital-C variant) would strip RNS's own
+    # fallback and leave it with NO crypto provider -- which fails with the same
+    # symptom as the bug above (UI launches, radio dead) for a different reason,
+    # and would sail past the negative check. This catches that.
+    print("FAIL: RNS/Cryptography/* is missing -- RNS has no crypto provider at all.")
+    print("      A good build carries ~24 of these as the pure-python fallback.")
+    print("      Most likely a pattern in sbapp/blacklist.txt was broadened and is")
+    print("      now matching RNS/Cryptography/ as well. See the comment in that file.")
+    sys.exit(1)
+
+print(f"OK: no bundled cryptography; RNS pure-python fallback present "
+      f"({len(fallback)} RNS/Cryptography entries).")
+PY
+
+if [ "$VERIFY_STATUS" -ne 0 ]; then
+  # Rename so publish_update.sh cannot pick it up: that script globs
+  # dist/navameshfarm-*-debug.apk and takes the newest match.
+  mv "$DIST_DIR/$APK_NAME" "$DIST_DIR/$APK_NAME.BROKEN"
+  echo ""
+  echo "Quarantined the bad build as: $DIST_DIR/$APK_NAME.BROKEN"
+  echo "(renamed so publish_update.sh cannot publish it)"
+  exit 1
+fi

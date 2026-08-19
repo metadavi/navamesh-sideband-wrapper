@@ -83,7 +83,26 @@ lib-dynload/_testcapi.so
 # odd files
 plat-linux3/regen
 
-# Navamesh: host-arch (x86_64) wheel pulled in via lxst->rns; RNS
-# falls back to its pure-python provider without it.
+# Navamesh: keep the host-arch (x86_64) cryptography wheel out of the bundle.
+# It arrives transitively (lxst -> rns -> cryptography), p4a's pip runs under an
+# x86_64 hostpython3, and the resulting _rust.abi3.so kills the backend service
+# in dlopen() while the UI still launches. RNS falls back to its own pure-python
+# provider when the package is absent, which is what every build through 1.9.8
+# shipped.
+#
+# WHY THE LOWERCASE MATTERS (the non-obvious part):
+# RNS's fallback provider lives at site-packages/RNS/Cryptography/ -- capital C.
+# p4a's match_filename() prepends "*/" to each pattern here, then matches with
+# fnmatch, which is case-SENSITIVE on Linux and macOS (os.path.normcase is the
+# identity function on both). So "*/cryptography/*" strips the real package and
+# leaves RNS/Cryptography/ untouched. Verified: the pattern matches
+# site-packages/cryptography/hazmat/bindings/_rust.abi3.so and does NOT match
+# site-packages/RNS/Cryptography/Proxies.py.
+#
+# So do NOT "tidy" these into something broader like *crypto* or add a
+# capital-C variant. That would strip RNS's fallback too, leaving it with no
+# crypto provider at all -- which fails with the SAME symptom (UI fine, radio
+# dead) for a completely different reason. build_apk.sh asserts that
+# RNS/Cryptography/* survives, specifically to catch that mistake.
 cryptography/*
 cryptography-*.dist-info/*
