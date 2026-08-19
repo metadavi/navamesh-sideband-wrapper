@@ -26,6 +26,28 @@
 
 set -euo pipefail
 
+# --- container runtime -------------------------------------------------------
+# Docker on macOS, podman on the Fedora build box (rootless, no sudo needed).
+# The two are CLI-compatible for everything this script uses: build, run, create,
+# cp, rm, volume, image inspect. Override with CONTAINER_CMD=... if needed.
+#
+# NOTE: the docker-cp-into-a-volume dance below exists for macOS -- Docker
+# Desktop's VirtioFS bind mounts break python-for-android with EDEADLK. It is
+# unnecessary on Linux but harmless, so both hosts share one code path rather
+# than maintaining a second script that would drift.
+if [ -z "${CONTAINER_CMD:-}" ]; then
+  if command -v docker > /dev/null 2>&1; then
+    CONTAINER_CMD=docker
+  elif command -v podman > /dev/null 2>&1; then
+    CONTAINER_CMD=podman
+  else
+    echo "ERROR: neither docker nor podman found on PATH." >&2
+    echo "Install one, or set CONTAINER_CMD explicitly." >&2
+    exit 1
+  fi
+fi
+echo "Container runtime: $CONTAINER_CMD"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SBAPP_DIR="$ROOT_DIR/sbapp"
@@ -41,7 +63,7 @@ SRC_VOLUME="navamesh-src"                 # project source (loaded via docker cp
 ANDROID_VOLUME="navamesh-android-home"    # persistent ~/.android (holds debug.keystore)
 HELPER="navamesh-src-helper"
 
-cleanup() { docker rm -f "$HELPER" > /dev/null 2>&1 || true; }
+cleanup() { "$CONTAINER_CMD" rm -f "$HELPER" > /dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 echo "=== Navamesh Farm APK build ==="
@@ -51,16 +73,16 @@ echo "Volumes: $SRC_VOLUME (source), $BUILD_VOLUME (build), $CACHE_VOLUME (SDK/N
 echo ""
 
 # Verify Docker is running
-if ! docker info > /dev/null 2>&1; then
-  echo "ERROR: Docker daemon is not running."
-  echo "Start Docker Desktop and retry, or see docs/BUILD.md for alternatives."
+if ! "$CONTAINER_CMD" info > /dev/null 2>&1; then
+  echo "ERROR: container runtime '$CONTAINER_CMD' is not responding."
+  echo "Start Docker Desktop (macOS) / check podman (Linux), or see docs/BUILD.md."
   exit 1
 fi
 
 # Build custom image if not present (fast — just pip installs, ~2 min)
-if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
+if ! "$CONTAINER_CMD" image inspect "$IMAGE" > /dev/null 2>&1; then
   echo "--- Building custom buildozer image (Python 3.12) ---"
-  docker build \
+  "$CONTAINER_CMD" build \
     --platform linux/amd64 \
     -f "$ROOT_DIR/Dockerfile.buildozer" \
     -t "$IMAGE" \
@@ -70,7 +92,7 @@ fi
 
 # Ensure volumes exist (created once; survive container restarts)
 for V in "$CACHE_VOLUME" "$BUILD_VOLUME" "$SRC_VOLUME" "$ANDROID_VOLUME"; do
-  docker volume inspect "$V" > /dev/null 2>&1 || docker volume create "$V"
+  "$CONTAINER_CMD" volume inspect "$V" > /dev/null 2>&1 || "$CONTAINER_CMD" volume create "$V"
 done
 
 mkdir -p "$DIST_DIR"
@@ -99,32 +121,32 @@ if [ ! -f "$KEYSTORE_FILE" ]; then
   echo "    -storepass android -keypass android -dname 'CN=Android Debug,O=Android,C=US'"
   exit 1
 fi
-echo "--- Seeding stable debug keystore into '$ANDROID_VOLUME' (docker cp) ---"
+echo "--- Seeding stable debug keystore into '$ANDROID_VOLUME' (container cp) ---"
 cleanup
 # The volume mounts at /home/user/.android, so that directory already exists and
 # docker cp (streams through the Docker API, no VirtioFS) lands the file inside it.
-docker create --name "$HELPER" -v "$ANDROID_VOLUME:/home/user/.android" "$IMAGE" > /dev/null
-docker cp "$KEYSTORE_FILE" "$HELPER:/home/user/.android/debug.keystore"
-docker rm "$HELPER" > /dev/null
+"$CONTAINER_CMD" create --name "$HELPER" -v "$ANDROID_VOLUME:/home/user/.android" "$IMAGE" > /dev/null
+"$CONTAINER_CMD" cp "$KEYSTORE_FILE" "$HELPER:/home/user/.android/debug.keystore"
+"$CONTAINER_CMD" rm "$HELPER" > /dev/null
 echo "Seeded debug.keystore (stable signer)"
 echo ""
 
 # --- Step 1: load source into the src volume via docker cp ---------------------
 # docker cp streams through the Docker API (no VirtioFS), so it sidesteps the
 # macOS bind-mount EDEADLK bug.  Only sbapp/ + recipes/ are copied (not .venv).
-echo "--- Loading source into '$SRC_VOLUME' (docker cp) ---"
+echo "--- Loading source into '$SRC_VOLUME' (container cp) ---"
 cleanup
 # Wipe the volume, then create a stopped helper that holds it.
-docker run --rm -v "$SRC_VOLUME:/dst" --entrypoint bash "$IMAGE" \
+"$CONTAINER_CMD" run --rm -v "$SRC_VOLUME:/dst" --entrypoint bash "$IMAGE" \
   -c 'rm -rf /dst/* /dst/.[!.]* /dst/..?* 2>/dev/null; true'
-docker create --name "$HELPER" -v "$SRC_VOLUME:/home/user/hostcwd" "$IMAGE" > /dev/null
-docker cp "$SBAPP_DIR"   "$HELPER:/home/user/hostcwd/"
-docker cp "$RECIPES_DIR" "$HELPER:/home/user/hostcwd/"
-docker cp "$LIBS_DIR"    "$HELPER:/home/user/hostcwd/"
+"$CONTAINER_CMD" create --name "$HELPER" -v "$SRC_VOLUME:/home/user/hostcwd" "$IMAGE" > /dev/null
+"$CONTAINER_CMD" cp "$SBAPP_DIR"   "$HELPER:/home/user/hostcwd/"
+"$CONTAINER_CMD" cp "$RECIPES_DIR" "$HELPER:/home/user/hostcwd/"
+"$CONTAINER_CMD" cp "$LIBS_DIR"    "$HELPER:/home/user/hostcwd/"
 # Drop any stale build/output dirs that rode along inside sbapp/.
-docker run --rm -v "$SRC_VOLUME:/dst" --entrypoint bash "$IMAGE" \
+"$CONTAINER_CMD" run --rm -v "$SRC_VOLUME:/dst" --entrypoint bash "$IMAGE" \
   -c 'rm -rf /dst/sbapp/.buildozer /dst/sbapp/bin 2>/dev/null; true'
-docker rm "$HELPER" > /dev/null
+"$CONTAINER_CMD" rm "$HELPER" > /dev/null
 echo ""
 
 # --- Step 1.5: patch p4a TargetPythonRecipe for meson numpy compatibility ------
@@ -135,7 +157,7 @@ echo ""
 # This pre-step injects a get_python_root shim into p4a's TargetPythonRecipe if
 # p4a is already cloned.  The Dockerfile wrapper handles the fresh-clone case.
 echo "--- Patching p4a TargetPythonRecipe (get_python_root shim) ---"
-docker run --rm \
+"$CONTAINER_CMD" run --rm \
   --platform linux/amd64 \
   -v "$BUILD_VOLUME:/home/user/hostcwd/sbapp/.buildozer" \
   --entrypoint python3 \
@@ -150,7 +172,7 @@ echo ""
 # This step mirrors what the recipe does: run ensurepip --root site_root if pip
 # is not already importable from site_dir.
 echo "--- Bootstrapping hostpython3 pip (if needed) ---"
-docker run --rm \
+"$CONTAINER_CMD" run --rm \
   --platform linux/amd64 \
   -v "$BUILD_VOLUME:/home/user/hostcwd/sbapp/.buildozer" \
   --entrypoint sh \
@@ -201,7 +223,7 @@ echo ""
 #   2. _sdl_common bootstrap template — picked up on a fresh first build
 #      (becomes src/res_initial on that first run)
 _inject_bootstrap_device_filter() {
-  docker run --rm \
+  "$CONTAINER_CMD" run --rm \
     --platform linux/amd64 \
     -v "$SRC_VOLUME:/src" \
     -v "$BUILD_VOLUME:/home/user/hostcwd/sbapp/.buildozer" \
@@ -240,7 +262,7 @@ echo ""
 # so packageDebug re-runs and signs with the seeded keystore.  (Native libs, dex
 # and merged resources are untouched, so this is a fast re-package, not a rebuild.)
 echo "--- Clearing cached debug APK so it re-signs with the stable keystore ---"
-docker run --rm \
+"$CONTAINER_CMD" run --rm \
   --platform linux/amd64 \
   -v "$BUILD_VOLUME:/home/user/hostcwd/sbapp/.buildozer" \
   --entrypoint sh "$IMAGE" -c '
@@ -255,7 +277,7 @@ echo ""
 # template and retry exactly once (all recipes are cached so the retry is fast).
 echo "--- Building APK ---"
 BUILD_STATUS=0
-docker run --rm \
+"$CONTAINER_CMD" run --rm \
   --platform linux/amd64 \
   -v "$SRC_VOLUME:/home/user/hostcwd" \
   -v "$CACHE_VOLUME:/home/user/.buildozer" \
@@ -271,7 +293,7 @@ if [ "$BUILD_STATUS" -ne 0 ]; then
   _inject_bootstrap_device_filter
   echo ""
   echo "--- Building APK (retry) ---"
-  docker run --rm \
+  "$CONTAINER_CMD" run --rm \
     --platform linux/amd64 \
     -v "$SRC_VOLUME:/home/user/hostcwd" \
     -v "$CACHE_VOLUME:/home/user/.buildozer" \
@@ -286,7 +308,7 @@ fi
 # --- Step 3: copy the finished APK back out via docker cp ---------------------
 echo ""
 echo "=== Build complete — copying APK to dist/ ==="
-APK_IN_VOL=$(docker run --rm -v "$SRC_VOLUME:/v" --entrypoint bash "$IMAGE" \
+APK_IN_VOL=$("$CONTAINER_CMD" run --rm -v "$SRC_VOLUME:/v" --entrypoint bash "$IMAGE" \
   -c 'find /v/sbapp/bin -name "*.apk" 2>/dev/null | head -1')
 if [ -z "$APK_IN_VOL" ]; then
   echo "ERROR: No APK found in sbapp/bin/ after build."
@@ -296,9 +318,9 @@ APK_BASENAME=$(basename "$APK_IN_VOL")
 APK_NAME=$(echo "$APK_BASENAME" | sed 's/^sideband/navamesh-farm/')
 HELPER_PATH="/home/user/hostcwd/sbapp/bin/$APK_BASENAME"
 
-docker create --name "$HELPER" -v "$SRC_VOLUME:/home/user/hostcwd" "$IMAGE" > /dev/null
-docker cp "$HELPER:$HELPER_PATH" "$DIST_DIR/$APK_NAME"
-docker rm "$HELPER" > /dev/null
+"$CONTAINER_CMD" create --name "$HELPER" -v "$SRC_VOLUME:/home/user/hostcwd" "$IMAGE" > /dev/null
+"$CONTAINER_CMD" cp "$HELPER:$HELPER_PATH" "$DIST_DIR/$APK_NAME"
+"$CONTAINER_CMD" rm "$HELPER" > /dev/null
 
 echo "APK: $DIST_DIR/$APK_NAME"
 ls -lh "$DIST_DIR/$APK_NAME"
