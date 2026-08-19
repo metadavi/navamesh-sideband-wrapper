@@ -20,6 +20,29 @@ android.gradle_dependencies =  com.android.support:support-compat:28.0.0
 
 p4a.local_recipes = ../recipes/
 
+# Custom file-blacklist for the packaged python bundle. This REPLACES p4a's
+# built-in blacklist, so blacklist.txt is a copy of p4a's defaults plus our own
+# entries at the end — keep it in sync if p4a's defaults ever change.
+#
+# The entry that matters: `cryptography/*`. RNS pulls cryptography in
+# transitively (lxst -> rns>=1.0.4 -> cryptography>=3.4.7), and p4a's pip step
+# runs under an x86_64 host interpreter, so it resolves the *host* manylinux
+# wheel and packages an x86_64 _rust.abi3.so into an arm64-v8a APK. The backend
+# service then dies instantly on start with:
+#   dlopen failed: ".../cryptography/hazmat/bindings/_rust.abi3.so" is for
+#   EM_X86_64 (62) instead of EM_AARCH64 (183)
+# which presents as a silently dead radio — no :service_sidebandservice process,
+# no RNS, no announces, "No devices heard yet" forever. RNS only uses
+# cryptography opportunistically and falls back to its own pure-python provider
+# (RNS/Cryptography/*), which is what every working build through 1.9.8 shipped.
+#
+# This lives in the spec (not in scripts/build_apk.sh) so it applies to EVERY
+# build host — the macOS Docker build and the Fedora Linux build alike.
+# Verify after building:
+#   unzip -p <apk> lib/arm64-v8a/libpybundle.so | tar -t | grep site-packages/cryptography
+# must print nothing.
+android.blacklist_src = blacklist.txt
+
 icon.filename = %(source.dir)s/assets/farm/icon.png
 icon.adaptive_foreground.filename = %(source.dir)s/assets/farm/icon_fg.png
 icon.adaptive_background.filename = %(source.dir)s/assets/farm/icon_bg.png
