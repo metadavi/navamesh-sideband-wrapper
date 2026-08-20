@@ -40,6 +40,16 @@ class Command:
     # the "no typing anywhere" rule that the rest of this UI follows, and makes an
     # out-of-range value impossible to enter in the first place.
     value_presets: tuple = ()
+    # True → the value is a "<lat> <lon>" string the farmer captures from the phone's GPS
+    # (or types in, if there is no fix), not a number chosen from presets.
+    #
+    # Deliberately NOT needs_value: that flag means "offer preset buttons", and a live
+    # position is the one value in this app with nothing to preset. get_wire() therefore
+    # substitutes a needs_location value verbatim and skips the int bounds check, which
+    # would be meaningless for a coordinate pair.
+    needs_location: bool = False
+    # False → the node picker hides its "ALL FIELD NODES" button for this command.
+    allow_broadcast: bool = True
 
 
 # Bounds mirror the firmware clamps (NavameshCommand.cpp) and the Pi's validation in
@@ -89,6 +99,12 @@ COMMANDS: list[Command] = [
         is_write=True, value_choices=("off",),
         confirm_hint="The node starts sending readings again.",
     ),
+    Command(
+        "set_location", "setloc {id} {value}", "📍", "Set node location", True,
+        is_write=True, needs_location=True, allow_broadcast=False,
+        confirm_hint=("The node has no GPS of its own, so it uses your phone's position. "
+                      "Stand next to the node before you send this."),
+    ),
 ]
 
 COMMAND_WIRE_STRINGS = [c.wire for c in COMMANDS]
@@ -124,11 +140,41 @@ def get_wire(key: str, node_id: Optional[str] = None, value: Optional[int] = Non
     if "{value}" in wire:
         if value is None:
             raise ValueError(f"Command {key!r} requires a value")
-        if not cmd.value_min <= int(value) <= cmd.value_max:
-            raise ValueError(
-                f"{cmd.value_label or 'value'} for {key!r} must be "
-                f"{cmd.value_min}-{cmd.value_max}, got {value}"
-            )
-        wire = wire.replace("{value}", str(int(value)))
+        if cmd.needs_location:
+            # Already formatted as "<lat> <lon>" by the confirm dialog, and validated there
+            # against +/-90 / +/-180. int() would truncate it and the min/max bounds are a
+            # numeric range that says nothing about a coordinate pair.
+            wire = wire.replace("{value}", _validated_latlon(key, value))
+        else:
+            if not cmd.value_min <= int(value) <= cmd.value_max:
+                raise ValueError(
+                    f"{cmd.value_label or 'value'} for {key!r} must be "
+                    f"{cmd.value_min}-{cmd.value_max}, got {value}"
+                )
+            wire = wire.replace("{value}", str(int(value)))
 
     return wire
+
+
+def _validated_latlon(key: str, value) -> str:
+    """
+    Re-check a "<lat> <lon>" string on its way to the wire.
+
+    The dialog validates before it gets here; this is the last gate, and it is worth having
+    because a malformed coordinate does not fail loudly downstream -- it becomes a plausible
+    number somewhere else on Earth.
+    """
+    bits = str(value).split()
+    if len(bits) != 2:
+        raise ValueError(f"Command {key!r} needs a latitude and a longitude, got {value!r}")
+    try:
+        lat, lon = float(bits[0]), float(bits[1])
+    except ValueError:
+        raise ValueError(f"{value!r} is not a latitude and longitude in decimal degrees")
+    if not -90.0 <= lat <= 90.0:
+        raise ValueError(f"Latitude must be -90 to 90, got {lat}")
+    if not -180.0 <= lon <= 180.0:
+        raise ValueError(f"Longitude must be -180 to 180, got {lon}")
+    if lat == 0.0 and lon == 0.0:
+        raise ValueError("Refusing to send 0, 0 — that means no position was captured")
+    return f"{lat:.7f} {lon:.7f}"

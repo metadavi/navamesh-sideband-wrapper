@@ -30,9 +30,17 @@ therefore only applies once that variable is populated.
 | `ble` | `ble <!id\|^all> <minutes>` | `"📤 Queued: Bluetooth window for N min → …"` then a later ack | 1–240 minutes |
 | `interval` | `interval <!id\|^all> <seconds>` | `"📤 Queued: telemetry interval N s → …"` then a later ack | 300–86400 seconds |
 | `quiet` | `quiet <!id\|^all> on\|off` | `"📤 Queued: quiet mode ON/OFF → …"` then a later ack | auto-resumes within 3 days |
+| `setloc` | `setloc <!id> <lat> <lon>` | `"📤 Queued: fixed position LAT, LON → …"` then a later ack | decimal degrees, 7 dp; **no `^all`** |
 | unauthorized | any of the above | `"Unauthorized: this gateway does not accept control commands from you."` | nothing is transmitted |
 | bad value | e.g. `ble !x 999` | `"⚠️  …must be …"` | rejected before transmit |
 | unknown node | e.g. `ble !nope 15` | `"Node '!nope' not found. …"` | rejected before transmit |
+| broadcast setloc | `setloc ^all 36.07 -109.04` | `"⚠️  'setloc' must name one node…"` | rejected before transmit |
+
+`setloc` is the only control command the wrapper builds from a value that is neither a
+preset nor on/off: the field nodes have no GPS, so the position comes from the phone's own
+fix (or, with no fix, from coordinates typed into the confirm dialog). Its ack is also the
+only one that reports a pair — the node echoes back the coordinates it actually stored, so
+the outcome line reads `"✅ <node> applied setloc = 36.072123, -109.045099"`.
 
 ### Asynchronous outcome
 

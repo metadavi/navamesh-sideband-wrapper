@@ -670,6 +670,17 @@ class NodePickerDialog:
         self._modal.open()
 
 
+def _coordinate_input_filter(box):
+    """
+    Bind location.coordinate_filter to a TextInput, in the shape Kivy's input_filter wants.
+
+    The rule itself lives in location.py, which imports no Kivy and can therefore be tested
+    without a display — this is only the adapter.
+    """
+    from .location import coordinate_filter
+    return lambda substring, from_undo: coordinate_filter(box.text, substring)
+
+
 class ConfirmCommandDialog:
     """Value picker + confirmation for a control command.
 
@@ -682,9 +693,16 @@ class ConfirmCommandDialog:
     anywhere" rule the rest of this UI follows, and it makes an out-of-range value
     impossible to enter rather than merely rejected afterwards.
 
+    "Set node location" is the exception, unavoidably: a live GPS position has nothing to
+    preset. It gets its own first step that reads the phone's own fix, falling back to
+    typed coordinates when there is no fix to read — the one place in this UI where a
+    number is entered by hand, because the alternative is a command the farmer cannot
+    complete at all indoors or with location switched off.
+
     Flow:
-      needs_value  → pick a preset, then confirm
-      otherwise    → confirm directly
+      needs_location → capture a position (GPS, or typed), then confirm
+      needs_value    → pick a preset, then confirm
+      otherwise      → confirm directly
 
     `on_confirm(value)` is invoked ONLY from _send(). Cancelling or dismissing sends
     nothing.
@@ -699,6 +717,15 @@ class ConfirmCommandDialog:
         self._on_confirm = on_confirm
         self._node_label = node_label or node_id
         self._value = None
+        # The captured Fix, kept alongside _value so the confirm step can show accuracy
+        # and warn on a coarse one. None for every command that is not needs_location.
+        self._fix = None
+        self._lat_input = None
+        self._lon_input = None
+        # A GPS search outlives the dialog: the farmer can cancel while it is still
+        # waiting, and the callback still fires seconds later. Without this it would
+        # rebuild a dismissed dialog's contents.
+        self._dismissed = False
 
         self._modal = ModalView(
             size_hint=(0.9, 0.8),
@@ -709,8 +736,13 @@ class ConfirmCommandDialog:
         self._scroll = ScrollView(size_hint=(1, 1))
         self._panel = Panel(padding=dp(theme.SPACE_MD), spacing=dp(theme.SPACE_MD))
         self._modal.add_widget(self._panel)
+        # Bound rather than set in each Cancel handler so it also catches auto_dismiss
+        # (a tap outside the dialog), which is the easy way to abandon a GPS search.
+        self._modal.bind(on_dismiss=self._mark_dismissed)
 
-        if cmd.needs_value and cmd.value_presets:
+        if getattr(cmd, "needs_location", False):
+            self._build_locate_step()
+        elif cmd.needs_value and cmd.value_presets:
             self._build_value_step()
         else:
             self._build_confirm_step()
@@ -766,8 +798,132 @@ class ConfirmCommandDialog:
         self._value = value
         self._build_confirm_step()
 
+    # ── location capture (needs_location commands only) ──────────────────────
+
+    def _build_locate_step(self, error=None):
+        self._clear()
+        self._panel.add_widget(SectionHeading(f"{self._cmd.label} — where?"))
+        self._panel.add_widget(self._hint_label(
+            f"Node: {self._node_label}\n{self._cmd.confirm_hint}"
+        ))
+        if error:
+            self._panel.add_widget(self._hint_label(error, color=theme.COLOR_MESA_RED))
+
+        use_gps = BigButton(icon="📡", label="Use my current location", variant="command")
+        use_gps.size_hint_y = None
+        use_gps.bind(on_release=lambda *_: self._start_fix())
+        self._panel.add_widget(use_gps)
+
+        manual = BigButton(icon="⌨", label="Enter coordinates", variant="command")
+        manual.size_hint_y = None
+        manual.bind(on_release=lambda *_: self._build_manual_step())
+        self._panel.add_widget(manual)
+
+        cancel = BigButton(label="Cancel", variant="command")
+        cancel.size_hint_y = None
+        cancel.bind(on_release=lambda *_: self._modal.dismiss())
+        self._panel.add_widget(cancel)
+
+    def _start_fix(self):
+        from kivy.clock import Clock
+        from . import location
+
+        self._clear()
+        self._panel.add_widget(SectionHeading("Finding your position"))
+        self._panel.add_widget(self._hint_label(
+            "Hold still in the open. This can take up to half a minute on a cold start."
+        ))
+        cancel = BigButton(label="Cancel", variant="command")
+        cancel.size_hint_y = None
+        cancel.bind(on_release=lambda *_: self._modal.dismiss())
+        self._panel.add_widget(cancel)
+
+        # plyer delivers its callback on whatever thread Android picks, so hop back to the
+        # Kivy thread before touching a single widget.
+        location.get_fix_async(
+            lambda fix, error: Clock.schedule_once(lambda _dt: self._on_fix(fix, error), 0)
+        )
+
+    def _mark_dismissed(self, *_args):
+        self._dismissed = True
+
+    def _on_fix(self, fix, error):
+        # The search runs for up to 25 s; the farmer may well have given up and closed the
+        # dialog by now. Rebuilding a dismissed dialog would leave an invisible one holding
+        # a captured position, so drop the result on the floor instead.
+        if self._dismissed:
+            return
+        if fix is None:
+            self._build_locate_step(error=error or "Could not read your position.")
+            return
+        self._use_fix(fix)
+
+    def _use_fix(self, fix):
+        """Accept a captured position and advance to confirmation. Never sends."""
+        self._fix = fix
+        self._value = fix.as_wire_value()
+        self._build_confirm_step()
+
+    def _build_manual_step(self, error=None):
+        from kivy.uix.textinput import TextInput
+
+        self._clear()
+        self._panel.add_widget(SectionHeading("Enter coordinates"))
+        self._panel.add_widget(self._hint_label(
+            "Decimal degrees. South and west are negative."
+        ))
+        if error:
+            self._panel.add_widget(self._hint_label(error, color=theme.COLOR_MESA_RED))
+
+        def field(hint):
+            box = TextInput(
+                hint_text=hint,
+                multiline=False,
+                font_size=sp(theme.FONT_BODY),
+                background_color=get_color_from_hex(theme.COLOR_SURFACE),
+                foreground_color=get_color_from_hex(theme.COLOR_ON_SURFACE),
+                cursor_color=get_color_from_hex(theme.COLOR_PRIMARY),
+                padding=[dp(theme.SPACE_SM), dp(theme.SPACE_SM)],
+                size_hint_y=None, height=dp(theme.INPUT_HEIGHT),
+            )
+            # NOT input_filter="float": Kivy's built-in float filter strips everything
+            # outside [0-9.], minus sign included, so it would silently make every
+            # longitude in the Navajo region impossible to type. Hence a custom filter.
+            box.input_filter = _coordinate_input_filter(box)
+            self._panel.add_widget(box)
+            return box
+
+        self._lat_input = field("Latitude, e.g. 36.0721")
+        self._lon_input = field("Longitude, e.g. -109.0450")
+
+        use = BigButton(icon="📍", label="Use these coordinates", variant="command")
+        use.size_hint_y = None
+        use.bind(on_release=lambda *_: self._accept_manual())
+        self._panel.add_widget(use)
+
+        back = BigButton(label="Back", variant="command")
+        back.size_hint_y = None
+        back.bind(on_release=lambda *_: self._build_locate_step())
+        self._panel.add_widget(back)
+
+    def _accept_manual(self):
+        from . import location
+        fix, error = location.parse_manual(
+            self._lat_input.text if self._lat_input else "",
+            self._lon_input.text if self._lon_input else "",
+        )
+        if fix is None:
+            self._build_manual_step(error=error)
+            return
+        self._use_fix(fix)
+
     def _summary(self):
         cmd = self._cmd
+        if getattr(cmd, "needs_location", False) and self._fix is not None:
+            where = f"{self._fix.latitude:.6f}, {self._fix.longitude:.6f}"
+            if self._fix.accuracy_m is not None:
+                return f"{cmd.label}: {where}  (±{self._fix.accuracy_m:.0f} m)"
+            return f"{cmd.label}: {where}"
         if cmd.needs_value:
             unit = cmd.value_label.lower()
             return f"{cmd.label}: {self._value} {unit}"
@@ -788,6 +944,20 @@ class ConfirmCommandDialog:
             self._panel.add_widget(self._hint_label(
                 f"{self._summary()}\n\nNode: {self._node_label}"
             ))
+
+        # A coarse fix is the failure mode that looks like success: the command goes
+        # through, the node acks, and the pin lands in the wrong part of the field. The
+        # farmer standing next to the node is the only one who can catch it, so say so
+        # before they tap Send rather than after.
+        if self._fix is not None and self._fix.is_poor:
+            if self._fix.accuracy_m is None:
+                warning = ("Your phone did not report how accurate this is. "
+                           "Check the numbers against where you are standing.")
+            else:
+                warning = (f"This position is only accurate to about "
+                           f"{self._fix.accuracy_m:.0f} m — the node may end up that far "
+                           f"from where you are standing.")
+            self._panel.add_widget(self._hint_label(warning, color=theme.COLOR_MESA_RED))
 
         if self._cmd.confirm_hint:
             self._panel.add_widget(self._hint_label(self._cmd.confirm_hint))

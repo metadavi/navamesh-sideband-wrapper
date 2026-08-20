@@ -15,7 +15,7 @@ os.environ["DISPLAY"] = ""  # prevent SDL2 from trying real display
 
 def test_command_registry_count():
     """
-    9 read commands plus 4 write commands.
+    9 read commands plus 5 write commands.
 
     Split by kind rather than asserting one total, so that accidentally adding a command
     that mutates field hardware fails here even if the total happens to look right. Write
@@ -25,9 +25,9 @@ def test_command_registry_count():
     reads = [c for c in COMMANDS if not c.is_write]
     writes = [c for c in COMMANDS if c.is_write]
     assert len(reads) == 9
-    assert len(writes) == 4
+    assert len(writes) == 5
     assert {c.key for c in writes} == {
-        "ble_window", "set_interval", "quiet_on", "quiet_off",
+        "ble_window", "set_interval", "quiet_on", "quiet_off", "set_location",
     }
 
 

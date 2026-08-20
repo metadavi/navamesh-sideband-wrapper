@@ -1093,7 +1093,9 @@ class FarmApp(App):
         self._poll_peer_messages()
 
     def dispatch_command(self, cmd_key: str, node_id: str | None = None, on_complete=None,
-                         value: int | None = None):
+                         value: "int | str | None" = None):
+        # str as well as int: "Set node location" carries its value as a "<lat> <lon>"
+        # string, since a coordinate pair is neither an integer nor bounded like one.
         wire = get_wire(cmd_key, node_id, value)
         if self.sideband and self._gateway_hash:
             threading.Thread(
@@ -1154,14 +1156,17 @@ class FarmApp(App):
 
         For control commands the picker also offers "ALL FIELD NODES", and picking a
         target still sends nothing — the caller routes it to the confirmation dialog.
+        Commands with allow_broadcast=False never offer it: "Set node location" sent to
+        every node would stamp the whole field with one coordinate.
         """
         from .widgets import NodePickerDialog
         is_write = getattr(cmd, "is_write", False)
+        allow_broadcast = getattr(cmd, "allow_broadcast", True)
         NodePickerDialog(
             nodes=list(self._node_cache),
             on_pick=lambda node_id: on_pick(cmd.key, node_id),
             heading=f"{cmd.label} — pick a target" if is_write else "Pick a node to map",
-            include_broadcast=is_write,
+            include_broadcast=is_write and allow_broadcast,
         ).open()
 
     def open_command_confirm(self, cmd, node_id, on_confirm):
