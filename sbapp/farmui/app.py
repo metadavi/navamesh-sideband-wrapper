@@ -837,6 +837,10 @@ class FarmApp(App):
     _update_ev = None
     _update_info = None
     _update_in_progress = False
+    # Poll handle for a DownloadManager transfer, and the id being watched.
+    _dl_poll_ev = None
+    _dl_id = None
+    _dl_poll_interval = 2.0
 
     def _start_update_checker(self):
         if self._update_ev is not None:
@@ -849,6 +853,9 @@ class FarmApp(App):
             updater.ensure_intent_binding()
         except Exception:
             pass
+        # Before polling for anything new, re-attach to a download the system may
+        # have been running while we were closed — it can even have finished.
+        self._resume_pending_download()
         Clock.schedule_once(self._update_check_tick, self._update_check_first_delay)
         self._update_ev = Clock.schedule_interval(
             self._update_check_tick, self._update_check_interval)
@@ -874,8 +881,12 @@ class FarmApp(App):
                     info["version"], self.apply_update), 0)
 
     def apply_update(self):
-        """Farmer tapped the update card: download the APK and hand it to the
-        system installer. Runs in a worker thread; card text shows progress."""
+        """Farmer tapped the update card.
+
+        Hands the APK to Android's DownloadManager and returns immediately: the
+        system finishes the transfer even if the phone sleeps or this app is
+        killed, which an in-process download cannot do. Falls back to the old
+        in-process download off Android (desktop) or if enqueuing fails."""
         if self._update_in_progress or not self._update_info:
             return
         from . import updater
@@ -886,11 +897,35 @@ class FarmApp(App):
                 "Allow updates on the next screen, then tap again", enabled=True)
             updater.open_install_permission_settings()
             return
+
+        version = str(self._update_info.get("version", ""))
+        if updater.downloads_available():
+            try:
+                dl_id = updater.enqueue_background_download(
+                    self._update_info["apk_url"], version)
+            except Exception as exc:
+                self._log_update(f"DownloadManager enqueue failed: {exc}")
+            else:
+                self._settings.pending_download = {"id": dl_id, "version": version}
+                self._update_in_progress = True
+                self._watch_download(dl_id)
+                # The reassurance is the whole point of this path.
+                self._str_screen.set_update_status(
+                    "Downloading… you can lock the phone")
+                return
+
+        # Fallback: in-process download (desktop, or DownloadManager refused).
         self._update_in_progress = True
         self._str_screen.set_update_status("Downloading update…")
         threading.Thread(target=self._apply_update_worker, daemon=True).start()
 
     def _apply_update_worker(self):
+        """In-process download fallback (desktop, or DownloadManager refused).
+
+        Kept for the non-Android path and as a backstop: this is the code that
+        cannot survive the screen going off, which is why Android now goes
+        through DownloadManager instead.
+        """
         from . import updater
         try:
             dest = os.path.join(self.user_data_dir, "updates", "navamesh_update.apk")
@@ -899,16 +934,137 @@ class FarmApp(App):
                 lambda _: self._str_screen.set_update_status("Installing…"), 0)
             updater.install_apk(dest, on_status=self._on_install_status)
         except Exception as exc:
-            msg = "Update failed — tap to retry"
-            try:
-                import RNS
-                RNS.log(f"Navamesh: update failed: {exc}", RNS.LOG_ERROR)
-            except Exception:
-                pass
+            self._log_update(f"update failed: {exc}")
             Clock.schedule_once(
-                lambda _: self._str_screen.set_update_status(msg, enabled=True), 0)
+                lambda _: self._str_screen.set_update_status(
+                    "Update failed — tap to retry", enabled=True), 0)
         finally:
             self._update_in_progress = False
+
+    def _log_update(self, message: str):
+        try:
+            import RNS
+            RNS.log(f"Navamesh: {message}", RNS.LOG_ERROR)
+        except Exception:
+            pass
+
+    # ── DownloadManager progress ─────────────────────────────────────────────
+
+    def _resume_pending_download(self):
+        """Re-attach to a persisted download id at startup.
+
+        A download that completed while the app was closed is the case that
+        matters: without this the farmer would be asked to fetch 91 MB again.
+        """
+        try:
+            pending = self._settings.pending_download
+        except Exception:
+            pending = None
+        if not pending:
+            return
+        from . import updater
+        if not updater.downloads_available():
+            return
+        state = updater.download_state(pending["id"])
+        if state["state"] in ("pending", "running", "paused"):
+            self._update_in_progress = True
+            self._update_info = self._update_info or {"version": pending["version"]}
+            Clock.schedule_once(
+                lambda _: self._str_screen.show_update(
+                    pending["version"], self.apply_update), 0)
+            Clock.schedule_once(
+                lambda _: self._str_screen.set_update_status(
+                    "Downloading… you can lock the phone"), 0)
+            self._watch_download(pending["id"])
+        elif state["state"] == "success":
+            self._update_in_progress = True
+            Clock.schedule_once(
+                lambda _: self._str_screen.show_update(
+                    pending["version"], self.apply_update), 0)
+            self._finish_download(state)
+        else:
+            # failed / gone / unknown — drop it and let the normal check re-offer.
+            self._clear_pending_download()
+
+    def _watch_download(self, dl_id):
+        """Poll DownloadManager and mirror progress onto the update card."""
+        self._dl_id = dl_id
+        if self._dl_poll_ev is not None:
+            self._dl_poll_ev.cancel()
+        self._dl_poll_ev = Clock.schedule_interval(
+            self._download_poll_tick, self._dl_poll_interval)
+
+    def _stop_watching_download(self):
+        if self._dl_poll_ev is not None:
+            self._dl_poll_ev.cancel()
+            self._dl_poll_ev = None
+        self._dl_id = None
+
+    def _clear_pending_download(self):
+        self._stop_watching_download()
+        try:
+            self._settings.pending_download = None
+        except Exception:
+            pass
+        self._update_in_progress = False
+
+    def _download_poll_tick(self, _dt):
+        dl_id = self._dl_id
+        if dl_id is None:
+            self._stop_watching_download()
+            return
+        from . import updater
+        state = updater.download_state(dl_id)
+        name = state["state"]
+
+        if name in ("pending", "running"):
+            pct = state["percent"]
+            self._str_screen.set_update_status(
+                f"Downloading… {pct}%" if pct is not None
+                else "Downloading… you can lock the phone")
+            return
+        if name == "paused":
+            # Almost always "waiting for Wi-Fi" — say so rather than looking stuck.
+            self._str_screen.set_update_status("Download paused — waiting for Wi-Fi")
+            return
+        if name == "success":
+            self._finish_download(state)
+            return
+
+        # failed / gone / unknown
+        self._clear_pending_download()
+        reason = f" ({state['reason']})" if state.get("reason") else ""
+        self._log_update(f"update download {name}{reason}")
+        self._str_screen.set_update_status(
+            "Download failed — tap to retry", enabled=True)
+
+    def _finish_download(self, state):
+        """A completed DownloadManager transfer → hand it to the installer."""
+        self._stop_watching_download()
+        path = state.get("path")
+        if not path or not os.path.exists(path):
+            self._clear_pending_download()
+            self._log_update(f"downloaded APK missing at {path!r}")
+            self._str_screen.set_update_status(
+                "Download failed — tap to retry", enabled=True)
+            return
+        self._str_screen.set_update_status("Installing…")
+        from . import updater
+        try:
+            updater.install_apk(path, on_status=self._on_install_status)
+        except Exception as exc:
+            self._log_update(f"install failed: {exc}")
+            self._str_screen.set_update_status(
+                "Update failed — tap to retry", enabled=True)
+            self._clear_pending_download()
+            return
+        # Installed (or the farmer is looking at the confirm dialog): the id has
+        # served its purpose, and keeping it would re-offer the same APK.
+        try:
+            self._settings.pending_download = None
+        except Exception:
+            pass
+        self._update_in_progress = False
 
     def _on_install_status(self, status: int):
         """Final PackageInstaller outcome (0 = success). On success the process
@@ -916,6 +1072,10 @@ class FarmApp(App):
         a cancelled/failed install re-arms the card so the farmer can retry."""
         if status == 0:
             return
+        # Cancelled/failed: drop the download id too. The APK is already on disk
+        # but re-tapping re-enqueues cleanly, and a stale id would make the next
+        # startup think a download was still in flight.
+        self._clear_pending_download()
         Clock.schedule_once(
             lambda _: self._str_screen.set_update_status(
                 "Update cancelled — tap to retry", enabled=True), 0)

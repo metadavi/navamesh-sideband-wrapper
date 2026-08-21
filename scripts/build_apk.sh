@@ -183,6 +183,76 @@ echo "--- Patching p4a TargetPythonRecipe (get_python_root shim) ---"
   "$IMAGE" /usr/local/bin/patch_p4a.py
 echo ""
 
+# --- Step 1.6: allow cleartext HTTP in the generated AndroidManifest ----------
+# Android 9+ blocks plaintext HTTP, but only for Android's OWN network stack --
+# DownloadManager, WebView, HttpURLConnection. Python's urllib talks straight to
+# sockets and never consulted the policy, which is why the OTA update checker
+# worked over http:// for months. Handing the APK download to DownloadManager
+# (so it survives the phone sleeping) put the transfer inside Android's stack
+# for the first time, and it was refused outright:
+#
+#   DownloadManager: Stop requested with status BAD_REQUEST:
+#     Cleartext traffic not permitted ... http://192.168.100.10:8090/...
+#
+# The documented route -- android.extra_manifest_application_arguments in
+# buildozer.spec -- is BROKEN in buildozer 1.5.0: it wraps the value in quotes
+# and backslash-escapes the inner ones for a shell, then passes argv as a list,
+# so the attribute lands in the manifest literally as
+#     "android:usesCleartextTraffic=\"true\" "
+# quotes and all, which is not valid XML and fails aapt2. So we patch p4a's
+# manifest template directly instead, the same way Step 1.5 patches p4a.
+#
+# Nothing in this system speaks HTTPS: the update host is a static file server
+# on the farm mesh with no internet uplink and therefore no path to a
+# publicly-signed certificate. If that ever changes, replace this with
+# android:networkSecurityConfig scoped to 192.168.100.0/24.
+echo "--- Patching p4a manifest template (usesCleartextTraffic) ---"
+"$CONTAINER_CMD" run $CONTAINER_SECOPT --rm \
+  --platform linux/amd64 \
+  -v "$BUILD_VOLUME:/home/user/hostcwd/sbapp/.buildozer" \
+  --entrypoint python3 \
+  "$IMAGE" -c '
+import glob, sys
+ATTR = "android:usesCleartextTraffic=\"true\""
+ANCHOR = "android:allowBackup="
+# Two locations matter, and missing either one silently ships a broken build:
+#   1. python-for-android/pythonforandroid/bootstraps/**  — used when a dist is
+#      first created.
+#   2. build-<arch>/dists/<name>/templates/               — p4a COPIES the
+#      template into the dist at creation time and renders from that copy on
+#      every subsequent build. Patching only (1) against an existing dist
+#      changes nothing, which is exactly how this was first missed.
+root = "/home/user/hostcwd/sbapp/.buildozer/android/platform"
+hits = 0
+for path in glob.glob(root + "/**/AndroidManifest.tmpl.xml", recursive=True):
+    text = open(path).read()
+    if "<application" not in text or ANCHOR not in text:
+        continue
+    if ATTR in text:                      # idempotent: safe on a warm volume
+        print("already patched:", path); hits += 1; continue
+    out = []
+    for line in text.splitlines(True):
+        out.append(line)
+        if ANCHOR in line:
+            indent = line[:len(line) - len(line.lstrip())]
+            out.append(indent + ATTR + "\n")
+    open(path, "w").write("".join(out))
+    print("patched:", path); hits += 1
+if not hits:
+    print("ERROR: no p4a manifest template patched — cleartext would be blocked",
+          file=sys.stderr)
+    sys.exit(1)
+# If a dist already exists, its own template copy is the one that renders. Not
+# patching that one is a silent failure, so make it a loud one.
+dist_templates = glob.glob(root + "/build-*/dists/*/templates/AndroidManifest.tmpl.xml")
+unpatched = [p for p in dist_templates if ATTR not in open(p).read()]
+if unpatched:
+    print("ERROR: dist manifest template(s) not patched: %s" % unpatched,
+          file=sys.stderr)
+    sys.exit(1)
+'
+echo ""
+
 # --- Step 1.6: bootstrap pip for hostpython3 if missing -----------------------
 # ensurepip only runs inside the hostpython3 recipe when build_configured=True
 # (first configure).  On incremental builds hostpython3 is already cached and

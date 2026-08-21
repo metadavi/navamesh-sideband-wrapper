@@ -34,18 +34,33 @@ back to 8080 — but then you must also change `DEFAULT_UPDATE_URLS` in
    profile to `ipv4.method manual`, `ipv4.addresses 192.168.100.10/24`, **no
    gateway**, keeping `ipv4.never-default yes`.)
 
-2. **Create the updates folder and install the service:**
+2. **Create the updates folder and install the server + service:**
 
    ```bash
    mkdir -p /home/pi/navamesh-updates
+   sudo cp navamesh_update_server.py /usr/local/bin/
+   sudo chmod +x /usr/local/bin/navamesh_update_server.py
    sudo cp navamesh-update-server.service /etc/systemd/system/
    sudo systemctl daemon-reload
    sudo systemctl enable --now navamesh-update-server
    ```
 
+   On a host where the user or layout differs, override the paths in the unit
+   rather than editing the script:
+   `Environment=NAVAMESH_UPDATES_DIR=/home/tj/navamesh-updates`
+
 3. **Check it:** from any device on the farm network,
    `http://192.168.100.10:8090/` should respond (a 404 on an empty folder is
-   fine — it means the server is up).
+   fine — it means the server is up). Also confirm Range works, because the
+   phone-side resume depends on it:
+
+   ```bash
+   curl -s -D - -o /dev/null -H "Range: bytes=0-99" \
+     http://192.168.100.10:8090/<the-apk>.apk | head -3
+   ```
+
+   Expect `206 Partial Content` with a `Content-Range` header. A `200` with the
+   full `Content-Length` means the stock `http.server` is still running.
 
 ## Publishing a release (from the build Mac)
 
@@ -65,6 +80,18 @@ Requirements for the update to be offered **and installable** on phones:
   `version.json` advertises a newer name.
 - Same keystore as always (automatic — it's committed in the repo).
 
+## Why not `python3 -m http.server`
+
+The stock module ignores `Range`: it answers with `200` and the whole file. The
+APK is ~91 MB over the HaLow mesh, so any interruption meant refetching all of
+it from byte 0, and Android's `DownloadManager` — which retries and resumes on
+its own — had nothing to resume against. `navamesh_update_server.py` is that
+module plus correct `206`/`416` handling and `Accept-Ranges: bytes`.
+
+Verified by reassembling a deliberately interrupted transfer: 40 MB, then the
+remainder via `Range: bytes=41943040-`, concatenated to a byte-exact md5 match
+of the published APK.
+
 ## version.json format
 
 ```json
@@ -75,8 +102,9 @@ Requirements for the update to be offered **and installable** on phones:
 
 ## Notes
 
-- The current baseline published to the Pi is `1.9.8` (matches what the phones
-  run), so phones correctly show *no* update until you publish a higher build.
+- The published baseline moves with each release; check `version.json` on the
+  Pi rather than trusting this file. Phones correctly show *no* update until
+  the manifest advertises a version higher than the one installed.
 - Field-verified end-to-end: a phone on the HaLow WiFi (`192.168.100.110`)
   fetched `version.json` and downloaded the 91 MB APK from the Pi over the mesh,
   and the Android installer engaged. (2026-07-13.)

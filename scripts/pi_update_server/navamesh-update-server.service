@@ -5,7 +5,14 @@ After=network.target
 [Service]
 Type=simple
 User=pi
-ExecStart=/usr/bin/python3 -m http.server 8090 --directory /home/pi/navamesh-updates
+# Range-capable server, NOT `python3 -m http.server`: the stock module answers a
+# Range request with 200 and the whole file, so an interrupted 91 MB download
+# restarted from byte 0 and Android's DownloadManager could never resume.
+ExecStart=/usr/bin/python3 /usr/local/bin/navamesh_update_server.py
+# Override per host if the user or layout differs (a test Pi, for example):
+#   Environment=NAVAMESH_UPDATES_DIR=/home/tj/navamesh-updates
+Environment=NAVAMESH_UPDATES_DIR=/home/pi/navamesh-updates
+Environment=NAVAMESH_UPDATES_PORT=8090
 Restart=always
 RestartSec=5
 

@@ -830,8 +830,14 @@ class ConfirmCommandDialog:
 
         self._clear()
         self._panel.add_widget(SectionHeading("Finding your position"))
+        # Says "usually" first because that is now the common case: with the farm's
+        # internet uplink up, Android answers from the network provider in about a
+        # second. The old copy blamed the satellites for a delay that was really the
+        # accuracy threshold, so a farmer standing in an open field was told to go
+        # stand in an open field.
         self._panel.add_widget(self._hint_label(
-            "Hold still in the open. This can take up to half a minute on a cold start."
+            "Usually a few seconds. It can take up to a minute the first time, "
+            "or if the farm has no internet — hold still in the open."
         ))
         cancel = BigButton(label="Cancel", variant="command")
         cancel.size_hint_y = None

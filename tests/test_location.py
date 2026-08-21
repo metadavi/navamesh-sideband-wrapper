@@ -122,7 +122,9 @@ def test_get_fix_reports_refused_permission_distinctly(monkeypatch):
     monkeypatch.setattr(loc, "is_android", lambda: True)
     monkeypatch.setattr(loc, "request_permissions", lambda: None)
     monkeypatch.setattr(loc, "has_permissions", lambda: False)
-    fix, error = loc.get_fix(timeout=0.1)
+    # permission_wait=0: get_fix now gives the farmer time to answer Android's
+    # modal before reading the grant back, and this test refuses it outright.
+    fix, error = loc.get_fix(timeout=0.1, permission_wait=0)
     assert fix is None
     assert "permission" in error.lower()
 
@@ -188,3 +190,96 @@ def test_good_enough_threshold_is_inside_the_poor_warning():
     the app would be settling for a position it does not itself trust.
     """
     assert loc.GOOD_ENOUGH_ACCURACY_M < loc.POOR_ACCURACY_M
+
+
+# ── Stale-fix rejection (plyer bypass) ──────────────────────────────────────────
+#
+# Android hands a newly-registered listener the receiver's last fix immediately.
+# For this feature that is the dangerous case: it pins a node to wherever the
+# farmer previously stood. plyer's facade drops the timestamp, so get_fix() reads
+# LocationManager directly; these cover the arithmetic that decides freshness.
+
+_NS = 1_000_000_000
+
+
+def test_fix_age_seconds():
+    assert loc.fix_age_seconds(0, 5 * _NS) == 5.0
+    assert loc.fix_age_seconds(5 * _NS, 5 * _NS) == 0.0
+    # Never negative: a fix stamped microseconds ahead must not read as "the future".
+    assert loc.fix_age_seconds(6 * _NS, 5 * _NS) == 0.0
+    # Unusable input sorts as infinitely old, so it can only ever be rejected.
+    assert loc.fix_age_seconds(None, 5 * _NS) == float("inf")
+    assert loc.fix_age_seconds("x", "y") == float("inf")
+
+
+def test_is_fresh_fix_accepts_a_live_reading():
+    start = 100 * _NS
+    now = 105 * _NS
+    assert loc.is_fresh_fix(now, now, start)              # this instant
+    assert loc.is_fresh_fix(102 * _NS, now, start)        # 3 s old, after start
+
+
+def test_is_fresh_fix_rejects_the_cached_fix_from_the_last_spot():
+    """The exact failure this exists to prevent.
+
+    Register a listener, and Android immediately delivers a fix taken ten minutes
+    ago twenty metres away. Its age alone condemns it, and so does the fact that it
+    predates the request.
+    """
+    start = 600 * _NS
+    now = 605 * _NS
+    stale = 5 * _NS                                        # ~10 min before start
+    assert not loc.is_fresh_fix(stale, now, start)
+
+
+def test_is_fresh_fix_rejects_by_age_even_if_after_start():
+    """A long attempt can outlive its own readings.
+
+    With a 120 s ceiling, a fix from 60 s ago is "after start" yet far too old to
+    describe where the farmer is standing now.
+    """
+    start = 0
+    now = 60 * _NS
+    assert not loc.is_fresh_fix(1 * _NS, now, start)
+
+
+def test_is_fresh_fix_grace_covers_the_boundary():
+    """A fix computed a moment before the request must not be thrown away."""
+    start = 100 * _NS
+    now = 100 * _NS
+    just_before = int((100 - loc.FIX_START_GRACE_SECONDS / 2) * _NS)
+    assert loc.is_fresh_fix(just_before, now, start)
+    well_before = int((100 - loc.FIX_START_GRACE_SECONDS - 1) * _NS)
+    assert not loc.is_fresh_fix(well_before, now, start)
+
+
+def test_thresholds_stay_ordered():
+    assert loc.GOOD_ENOUGH_ACCURACY_M < loc.POOR_ACCURACY_M
+    # The freshness window must exceed the 1 s update interval we request, or a
+    # live receiver's own readings would be rejected as stale.
+    assert loc.FIX_MAX_AGE_SECONDS > 1.0
+    assert loc.FIX_MAX_AGE_SECONDS < loc.FIX_TIMEOUT_SECONDS
+
+
+def test_plyer_is_no_longer_used_for_the_fix():
+    """Regression guard: going back to plyer silently loses the timestamp."""
+    import inspect
+    src = inspect.getsource(loc.get_fix)
+    # The docstring and comments name plyer to explain the choice, so assert on an
+    # actual import rather than the word appearing anywhere.
+    assert "from plyer" not in src
+    assert "import plyer" not in src
+    assert "getElapsedRealtimeNanos" in inspect.getsource(loc)
+    assert "is_fresh_fix" in src
+
+
+def test_stale_only_result_says_so_distinctly():
+    """"Only an old position" must not be reported as "no fix".
+
+    They call for opposite actions: one means wait a moment, the other means go
+    find open sky.
+    """
+    import inspect
+    src = inspect.getsource(loc.get_fix)
+    assert "Only an old position" in src
+    assert "Step into the open" in src

@@ -196,3 +196,240 @@ def test_manifest_permission_declared():
     with open(os.path.join(root, "sbapp", "buildozer.spec")) as f:
         spec = f.read()
     assert "REQUEST_INSTALL_PACKAGES" in spec
+
+
+# ── Background download via DownloadManager ─────────────────────────────────────
+#
+# The transfer itself runs in an Android system process, so what is testable off
+# device is the arithmetic, the status mapping, and the wiring that decides what
+# the farmer sees. The jnius calls are covered as source guards, the same way the
+# PackageInstaller glue above is.
+
+def test_download_percent():
+    from sbapp.farmui.updater import download_percent
+    assert download_percent(0, 100) == 0
+    assert download_percent(50, 100) == 50
+    assert download_percent(95021308, 95021308) == 100
+    # DownloadManager reports total = -1 until Content-Length arrives; a
+    # percentage from that would render as "-0%" on the card.
+    assert download_percent(1024, -1) is None
+    assert download_percent(1024, 0) is None
+    assert download_percent(None, None) is None
+    assert download_percent("x", "y") is None
+    # Never exceeds 100 even if the server lies about the total.
+    assert download_percent(200, 100) == 100
+
+
+def test_dm_status_mapping_covers_every_documented_status():
+    """Android's five DownloadManager.STATUS_* values must all map to a state.
+
+    An unmapped status would fall through to "unknown", which the app treats as
+    a failure — silently discarding a download that was merely paused.
+    """
+    from sbapp.farmui.updater import _DM_STATUS
+    assert _DM_STATUS[1] == "pending"
+    assert _DM_STATUS[2] == "running"
+    assert _DM_STATUS[4] == "paused"
+    assert _DM_STATUS[8] == "success"
+    assert _DM_STATUS[16] == "failed"
+
+
+def test_uri_to_path():
+    from sbapp.farmui.updater import _uri_to_path
+    assert _uri_to_path("file:///storage/emulated/0/x/navamesh_update.apk") == \
+        "/storage/emulated/0/x/navamesh_update.apk"
+    # Percent-encoding is real: external files dirs contain the package name.
+    assert _uri_to_path("file:///a/My%20Files/u.apk") == "/a/My Files/u.apk"
+    assert _uri_to_path("content://downloads/42") is None
+    assert _uri_to_path("") is None
+    assert _uri_to_path(None) is None
+
+
+def test_download_state_is_safe_off_android():
+    """Off-device there is no DownloadManager; this must not raise."""
+    from sbapp.farmui.updater import download_state, downloads_available
+    assert downloads_available() is False
+    state = download_state(1234)
+    assert state["state"] == "unknown"
+    assert state["path"] is None
+
+
+def test_cancel_background_download_is_safe_off_android():
+    from sbapp.farmui.updater import cancel_background_download
+    cancel_background_download(1234)   # must not raise
+    cancel_background_download(None)
+
+
+def test_enqueue_restricts_to_wifi_and_survives_sleep():
+    """Source guards on the DownloadManager request.
+
+    Each of these is load-bearing for "downloads while the phone is asleep":
+    Wi-Fi-only makes it wait for Wi-Fi instead of failing on cellular (the update
+    host only exists on the farm LAN), and requiring neither idle nor charging
+    keeps it from parking on a farmer's phone that is neither.
+    """
+    import inspect
+    from sbapp.farmui import updater
+    src = inspect.getsource(updater.enqueue_background_download)
+    assert "NETWORK_WIFI" in src
+    assert "setAllowedOverRoaming" in src
+    assert "setRequiresDeviceIdle" in src
+    assert "setRequiresCharging" in src
+    # Progress in the notification shade is the only feedback once pocketed.
+    assert "VISIBILITY_VISIBLE_NOTIFY_COMPLETED" in src
+    # App-private external dir: no storage permission, readable by us.
+    assert "setDestinationInExternalFilesDir" in src
+
+
+def test_purge_previous_apk_is_called_before_enqueue():
+    """DownloadManager silently renames rather than overwriting.
+
+    Without the purge, every update leaves another ~91 MB behind and the file
+    name drifts to navamesh_update-1.apk, -2.apk, ...
+    """
+    import inspect
+    from sbapp.farmui import updater
+    src = inspect.getsource(updater.enqueue_background_download)
+    assert src.index("_purge_previous_apk") < src.index("setDestinationInExternalFilesDir")
+
+
+# ── FarmApp wiring ──────────────────────────────────────────────────────────────
+
+def test_app_prefers_downloadmanager_and_falls_back():
+    import inspect
+    from sbapp.farmui.app import FarmApp
+    src = inspect.getsource(FarmApp.apply_update)
+    assert "downloads_available" in src
+    assert "enqueue_background_download" in src
+    # The reassurance that makes the feature worth having.
+    assert "lock the phone" in src
+    # Desktop / refused-enqueue path must still work.
+    assert "_apply_update_worker" in src
+
+
+def test_app_persists_download_id_for_restart():
+    """The id must be persisted, not held in memory.
+
+    A download that finishes while the app is closed is the whole point; if the
+    id only lived on the instance, the farmer would refetch 91 MB.
+    """
+    import inspect
+    from sbapp.farmui.app import FarmApp
+    assert "pending_download" in inspect.getsource(FarmApp.apply_update)
+    assert "pending_download" in inspect.getsource(FarmApp._resume_pending_download)
+    src = inspect.getsource(FarmApp._start_update_checker)
+    assert "_resume_pending_download" in src
+
+
+def test_resume_handles_completed_download_while_closed():
+    import inspect
+    from sbapp.farmui.app import FarmApp
+    src = inspect.getsource(FarmApp._resume_pending_download)
+    # In-flight → keep watching; finished → install; anything else → clear.
+    for expected in ('"pending", "running", "paused"', '"success"',
+                     "_clear_pending_download"):
+        assert expected in src, expected
+
+
+def test_paused_download_explains_itself():
+    """A Wi-Fi-only download parks as PAUSED off Wi-Fi; say so, don't look stuck."""
+    import inspect
+    from sbapp.farmui.app import FarmApp
+    src = inspect.getsource(FarmApp._download_poll_tick)
+    assert "paused" in src
+    assert "Wi-Fi" in src
+
+
+def test_finish_download_verifies_file_exists():
+    """COLUMN_LOCAL_URI can point at a file the user cleared from the shade."""
+    import inspect
+    from sbapp.farmui.app import FarmApp
+    src = inspect.getsource(FarmApp._finish_download)
+    assert "os.path.exists" in src
+    assert "install_apk" in src
+
+
+# ── FarmSettings.pending_download ───────────────────────────────────────────────
+
+def test_pending_download_roundtrip_and_rejects_junk():
+    from sbapp.farmui.settings import FarmSettings
+    with tempfile.TemporaryDirectory() as d:
+        s = FarmSettings(d)
+        assert s.pending_download is None
+
+        s.pending_download = {"id": 42, "version": "1.9.12"}
+        assert s.pending_download == {"id": 42, "version": "1.9.12"}
+
+        # Survives a reload — the case that matters (app was killed).
+        assert FarmSettings(d).pending_download == {"id": 42, "version": "1.9.12"}
+
+        s.pending_download = None
+        assert s.pending_download is None
+        assert FarmSettings(d).pending_download is None
+
+
+def test_pending_download_tolerates_corrupt_state():
+    """A hand-edited or truncated settings file must not crash startup."""
+    from sbapp.farmui.settings import FarmSettings
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "farmui_settings.json")
+        for junk in ('{"pending_download": "nonsense"}',
+                     '{"pending_download": {"version": "1.9.12"}}',
+                     '{"pending_download": {"id": "not-an-int"}}',
+                     '{"pending_download": []}'):
+            with open(path, "w") as f:
+                f.write(junk)
+            assert FarmSettings(d).pending_download is None, junk
+
+
+def test_download_state_avoids_varargs_setfilterbyid():
+    """Regression: setFilterById(long...) is a jnius binding we cannot verify
+    off-device, and on-device it threw — turning a hard failure into "unknown"
+    and hiding the real cause (cleartext blocked). We scan and match COLUMN_ID.
+    """
+    import inspect
+    from sbapp.farmui import updater
+    src = inspect.getsource(updater.download_state)
+    # Comments deliberately mention setFilterById to explain the choice, so
+    # assert against code only.
+    code = "\n".join(l for l in src.splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert ".setFilterById(" not in code
+    assert "COLUMN_ID" in code
+    # Failures must be logged, never silently swallowed.
+    assert "_log(" in code
+
+
+def test_download_state_distinguishes_gone_from_unknown():
+    """"gone" (row pruned/cleared) and "unknown" (we failed to read) are
+    different problems: one is routine, the other is a bug worth logging."""
+    import inspect
+    from sbapp.farmui import updater
+    src = inspect.getsource(updater.download_state)
+    assert '"gone"' in src
+    assert "not found" in src or "if not found" in src
+
+
+def test_cleartext_traffic_is_patched_into_manifest_template():
+    """DownloadManager refuses http:// without usesCleartextTraffic.
+
+    urllib never needed it (Python sockets bypass Android's network-security
+    policy entirely), which is why the gap survived until the download moved
+    into Android's own stack.
+
+    Asserted against build_apk.sh rather than buildozer.spec on purpose:
+    buildozer 1.5.0's android.extra_manifest_application_arguments is broken --
+    it shell-escapes the value but passes argv as a list, so the attribute lands
+    in the manifest as  "android:usesCleartextTraffic=\\"true\\" "  , quotes
+    included, and aapt2 rejects it. We patch p4a's template instead.
+    """
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script = open(os.path.join(root, "scripts", "build_apk.sh")).read()
+    assert "usesCleartextTraffic" in script
+    assert "AndroidManifest.tmpl.xml" in script
+    # Must fail loudly rather than silently shipping a build that cannot download.
+    assert "no p4a manifest template patched" in script
+    # The broken buildozer route must not come back.
+    spec = open(os.path.join(root, "sbapp", "buildozer.spec")).read()
+    assert "extra_manifest_application_arguments" not in spec

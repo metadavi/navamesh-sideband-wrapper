@@ -16,6 +16,7 @@ _DEFAULT = {
     "node_cache":           [],
     "peer_aliases":         {},
     "update_urls":          None,   # None → updater's DEFAULT_UPDATE_URLS
+    "pending_download":     None,   # {"id": int, "version": str} while an OTA download is in flight
     "dev_mode":             False,
 }
 
@@ -117,6 +118,32 @@ class FarmSettings:
     @update_urls.setter
     def update_urls(self, value):
         self._data["update_urls"] = list(value) if value else None
+        self._save()
+
+    # An OTA download handed to Android's DownloadManager outlives this process:
+    # the system keeps transferring while the app is asleep or killed. The id is
+    # the only handle to it, so it has to survive with the app, not in memory —
+    # otherwise a download that completed while the app was closed is orphaned,
+    # and the farmer is asked to fetch 91 MB a second time.
+    @property
+    def pending_download(self) -> Optional[dict]:
+        d = self._data.get("pending_download")
+        if not isinstance(d, dict) or "id" not in d:
+            return None
+        try:
+            return {"id": int(d["id"]), "version": str(d.get("version", ""))}
+        except (TypeError, ValueError):
+            return None
+
+    @pending_download.setter
+    def pending_download(self, value):
+        if not value:
+            self._data["pending_download"] = None
+        else:
+            self._data["pending_download"] = {
+                "id": int(value["id"]),
+                "version": str(value.get("version", "")),
+            }
         self._save()
 
     @property
