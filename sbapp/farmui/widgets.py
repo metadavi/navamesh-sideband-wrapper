@@ -693,7 +693,7 @@ class ConfirmCommandDialog:
     anywhere" rule the rest of this UI follows, and it makes an out-of-range value
     impossible to enter rather than merely rejected afterwards.
 
-    "Set node location" is the exception, unavoidably: a live GPS position has nothing to
+    "Change sensor location" is the exception, unavoidably: a live GPS position has nothing to
     preset. It gets its own first step that reads the phone's own fix, falling back to
     typed coordinates when there is no fix to read — the one place in this UI where a
     number is entered by hand, because the alternative is a command the farmer cannot

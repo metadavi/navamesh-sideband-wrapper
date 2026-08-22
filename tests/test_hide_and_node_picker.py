@@ -126,7 +126,7 @@ def test_preset_labels_renamed():
     from sbapp.farmui.command_registry import COMMANDS
     by_key = {c.key: c for c in COMMANDS}
     assert by_key["position"].label == "Position"
-    assert by_key["link"].label == "Link strength"
+    assert by_key["link"].label == "Sensor strength"
     # Wire strings are untouched (the help-list commands stay the same).
     assert by_key["position"].wire == "position"
     assert by_key["link"].wire == "link"

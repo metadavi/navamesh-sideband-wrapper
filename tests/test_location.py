@@ -1,5 +1,5 @@
 """
-test_location.py — the one-shot GPS fix behind "Set node location".
+test_location.py — the one-shot GPS fix behind "Change sensor location".
 
 farmui/location.py deliberately imports no Kivy, so all of this runs on a desktop with no
 phone and no display. The Android-only branches are covered by monkeypatching is_android,

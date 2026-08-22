@@ -261,7 +261,7 @@ def test_node_picker_offers_broadcast_only_for_write_commands():
 def test_node_picker_honours_allow_broadcast():
     """
     The ALL button must be gated on the command's own allow_broadcast too, not just on
-    is_write — otherwise "Set node location" would offer a target it must never accept.
+    is_write — otherwise "Change sensor location" would offer a target it must never accept.
     """
     body = _function_body(_source("app.py"), "open_node_picker")
     assert "allow_broadcast" in body

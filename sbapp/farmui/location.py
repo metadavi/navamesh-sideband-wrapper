@@ -1,5 +1,5 @@
 """
-location.py — one-shot GPS fix for the "Set node location" command.
+location.py — one-shot GPS fix for the "Change sensor location" command.
 
 The field nodes ship with gps_mode = NOT_PRESENT and have no receiver of their own, so
 a node's position can only ever come from outside it. The stock Meshtastic app supplies

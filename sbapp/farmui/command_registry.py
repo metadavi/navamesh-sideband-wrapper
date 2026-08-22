@@ -57,18 +57,20 @@ class Command:
 # it is sent, the Pi rejects it with a readable message if it arrives anyway, and the node
 # clamps it as a last resort.
 COMMANDS: list[Command] = [
+    # Help first: it is the one command a farmer reaches for when they do not already
+    # know what the others do, so it should not be the last thing they find.
+    Command("help",      "help",      "❓", "Help",            False),
     Command("status",    "status",    "📋", "Farm status",     False),
     Command("soil",      "soil",      "💧", "Soil moisture",   False),
     Command("battery",   "battery",   "🔋", "Battery",         False),
     Command("position",  "position",  "📍", "Position",        False),
-    Command("link",      "link",      "📡", "Link strength",   False),
+    Command("link",      "link",      "📡", "Sensor strength", False),
     Command("map_all",   "map",       "🗺",  "Map — all nodes", False),
     Command("map_one",   "map {id}",  "🗺",  "Map — one node",  True),
     Command("nodes",     "nodes",     "🛰",  "List nodes",      False),
-    Command("help",      "help",      "❓", "Help",            False),
 
     Command(
-        "ble_window", "ble {id} {value}", "🔧", "Open Bluetooth window", True,
+        "ble_window", "ble {id} {value}", "🔧", "Bluetooth on", True,
         is_write=True, needs_value=True, value_label="Minutes",
         value_default=30, value_min=1, value_max=240,
         confirm_hint=("The node turns Bluetooth on for this long, then switches it off "
@@ -88,19 +90,19 @@ COMMANDS: list[Command] = [
                        ("1 hour", 3600), ("8 hours", 28800), ("24 hours", 86400)),
     ),
     Command(
-        "quiet_on", "quiet {id} on", "🔇", "Pause transmitting", True,
+        "quiet_on", "quiet {id} on", "🔇", "Pause messaging", True,
         is_write=True, value_choices=("on",),
         confirm_hint=("The node stops sending but keeps listening, so you can resume it "
                       "at any time. It also resumes on its own within 3 days, and any "
                       "reboot resumes it immediately."),
     ),
     Command(
-        "quiet_off", "quiet {id} off", "🔊", "Resume transmitting", True,
+        "quiet_off", "quiet {id} off", "🔊", "Resume messaging", True,
         is_write=True, value_choices=("off",),
         confirm_hint="The node starts sending readings again.",
     ),
     Command(
-        "set_location", "setloc {id} {value}", "📍", "Set node location", True,
+        "set_location", "setloc {id} {value}", "📍", "Change sensor location", True,
         is_write=True, needs_location=True, allow_broadcast=False,
         confirm_hint=("The node has no GPS of its own, so it uses your phone's position. "
                       "Stand next to the node before you send this."),

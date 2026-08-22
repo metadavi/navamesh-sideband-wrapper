@@ -1254,7 +1254,7 @@ class FarmApp(App):
 
     def dispatch_command(self, cmd_key: str, node_id: str | None = None, on_complete=None,
                          value: "int | str | None" = None):
-        # str as well as int: "Set node location" carries its value as a "<lat> <lon>"
+        # str as well as int: "Change sensor location" carries its value as a "<lat> <lon>"
         # string, since a coordinate pair is neither an integer nor bounded like one.
         wire = get_wire(cmd_key, node_id, value)
         if self.sideband and self._gateway_hash:
@@ -1316,7 +1316,7 @@ class FarmApp(App):
 
         For control commands the picker also offers "ALL FIELD NODES", and picking a
         target still sends nothing — the caller routes it to the confirmation dialog.
-        Commands with allow_broadcast=False never offer it: "Set node location" sent to
+        Commands with allow_broadcast=False never offer it: "Change sensor location" sent to
         every node would stamp the whole field with one coordinate.
         """
         from .widgets import NodePickerDialog
