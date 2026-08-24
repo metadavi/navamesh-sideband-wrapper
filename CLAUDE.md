@@ -7,8 +7,7 @@ gateway" into buttons a person can use standing in a field.
 Cross-repo context, including how a command reaches a sensor and back, is in the
 **Navamesh** repo's `CLAUDE.md`. This file is about this repo.
 
-Branch: **`raw-adc-private-app`**. Current release **1.9.18** (`android.numeric_version =
-20260827`), unchanged since 2026-08-21.
+Branch: **`raw-adc-private-app`**. Current release **1.9.19** (`android.numeric_version = 20260828`), 2026-08-24.
 
 **Most farmer-facing wording is not in this repo.** The app sends a verb and renders
 whatever the gateway returns, so `help` and every reply body — soil, status, node list,
@@ -18,30 +17,39 @@ confirmation dialogs and the value presets in `command_registry.py`. When both a
 play, keep them saying the same thing: the Pi's `test_farmer_wording.py` pins its help
 text to the same vocabulary as these buttons.
 
-## Planned next (2026-08-24): manual entry for the reporting interval
+## Built 2026-08-24: manual interval entry, and a reply area that fits
 
-Being built on the Mac. What to know before touching `command_registry.py`:
+**"Enter a time" beside the interval presets.** A number plus a Minutes/Hours button, in
+`ConfirmCommandDialog._build_manual_value_step()`. A considered exception to the
+presets-only rule, not a gap: farmers asked to time a specific node rather than pick from a
+list. The precedent is `set_location`'s "Enter coordinates", but note the difference that
+matters — a coordinate pair has no numeric bounds, so `get_wire()` skips its range check;
+an interval is an int and the bounds *do* apply, so `validate_manual_value()` enforces them
+before the confirm step and `get_wire()` still enforces them after. Bounds stay triplicated
+(UI → `command_proto.py` → firmware clamp) and there is exactly **one** copy inside this
+repo, so the manual and preset paths cannot disagree.
 
-The write commands offer **`value_presets` only, deliberately**. The comment there records
-two reasons: it keeps the "no typing anywhere" rule the rest of this UI follows, and a
-preset list makes an out-of-range value impossible to enter in the first place. So adding a
-manual field is a considered exception, not a gap being filled.
+The wire string is unchanged (`interval <id> <seconds>`) — the app converts, so neither the
+Pi nor the firmware had to learn units. The confirm step reads back in the farmer's units
+("every 45 minutes", not "2700 seconds"), because that screen is the last thing between a
+tap and a reconfigured node.
 
-The precedent to follow is `set_location`, which uses `needs_location` rather than
-`needs_value` and offers "Enter coordinates" beside "Use my current location" — because a
-live position is the one value with nothing sensible to preset. `get_wire()` substitutes a
-`needs_location` value verbatim and skips the int bounds check, which would be meaningless
-for a coordinate pair. A manual *interval* is the opposite case: it is an int and the bounds
-do apply, so it must still be validated here rather than borrowing that skip.
+**The conversation screen scrolls as one page.** Previously only the reply area scrolled,
+under a fixed gateway strip and a 14-tile grid that between them took most of a phone
+screen. A `help` reply is 27 lines and arrived in a viewport showing about eight, so a
+complete answer read as a truncated one. The grid now scrolls away with everything else;
+only `BackBar` stays pinned. Two things that break if this is edited carelessly: the
+scrolling column must track `minimum_height` or it collapses, and `EmptyState` stretches by
+default so it needs an explicit height to survive in that column. A new reply calls
+`_reveal_replies()`, deferred one frame because a `ResultCard`'s height comes from its label
+texture and is still 0 at the moment it is added.
 
-Bounds stay **triplicated** — this UI, then the Pi's `processors/command_proto.py`, then the
-firmware clamp — so a bad value is stopped early, explained in the middle, and clamped as a
-last resort. `value_min=60`, `value_max=86400` here; 300 s is the firmware's practical floor.
-Do not relax the UI bound on the grounds that the Pi also checks.
-
-One thing worth carrying into the confirm text: the ack is authoritative, and a **timeout is
-not a failure**. On a marginal link a command can apply on the node while its ack is lost —
-observed on the bench. See the Pi repo's `CLAUDE.md` for the RSSI numbers behind that.
+**Gateway reply text wraps at about 44 columns** on the deployed handsets (measured on a
+moto g play, 2026-08-24). That is a *Pi-side* constraint, since the reply bodies are composed
+in `reticulum_bridge.py` — its `test_farmer_wording.py` now pins the help text to 43 columns.
+Worth knowing here because the symptom appears in this app: an over-wide line wraps to column
+0 and collides with the deliberate 6-space continuation indents, which reads as corruption
+rather than as wrapping.
 
 ## Where our code lives
 

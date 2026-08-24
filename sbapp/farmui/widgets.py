@@ -722,6 +722,7 @@ class ConfirmCommandDialog:
         self._fix = None
         self._lat_input = None
         self._lon_input = None
+        self._value_input = None
         # A GPS search outlives the dialog: the farmer can cancel while it is still
         # waiting, and the callback still fires seconds later. Without this it would
         # rebuild a dismissed dialog's contents.
@@ -785,6 +786,12 @@ class ConfirmCommandDialog:
             btn = BigButton(icon=self._cmd.icon, label=label, variant="command")
             btn.bind(on_release=lambda _b, v=value: self._pick_value(v))
             col.add_widget(btn)
+        # Last, not first: the presets are the answer nearly every time, and putting a
+        # keyboard ahead of them would make the common case the harder one.
+        if getattr(self._cmd, "allow_manual_value", False):
+            manual = BigButton(icon="\u2328", label="Enter a time", variant="command")
+            manual.bind(on_release=lambda *_: self._build_manual_value_step())
+            col.add_widget(manual)
         scroll.add_widget(col)
         self._panel.add_widget(scroll)
 
@@ -797,6 +804,61 @@ class ConfirmCommandDialog:
         # Choosing a value does NOT send; it advances to the confirmation step.
         self._value = value
         self._build_confirm_step()
+
+    def _build_manual_value_step(self, error=None):
+        """Type a number, tap a unit. Two taps and a number, no unit dropdown.
+
+        The unit buttons carry the action rather than sitting beside a separate "OK":
+        picking "Hours" IS the submit, so there is no state where a farmer has typed a
+        number, chosen a unit and still not noticed the button that accepts it.
+        """
+        from kivy.uix.textinput import TextInput
+        from .command_registry import VALUE_UNITS
+
+        self._clear()
+        self._panel.add_widget(SectionHeading(f"{self._cmd.label} — how often?"))
+        self._panel.add_widget(self._hint_label(
+            f"For {self._target_text()}\nType a number, then choose minutes or hours."
+        ))
+        if error:
+            self._panel.add_widget(self._hint_label(error, color=theme.COLOR_MESA_RED))
+
+        box = TextInput(
+            hint_text="e.g. 45",
+            multiline=False,
+            input_filter="int",   # a cadence in whole minutes or hours; no sign, no decimal
+            font_size=sp(theme.FONT_BODY),
+            background_color=get_color_from_hex(theme.COLOR_SURFACE),
+            foreground_color=get_color_from_hex(theme.COLOR_ON_SURFACE),
+            cursor_color=get_color_from_hex(theme.COLOR_PRIMARY),
+            padding=[dp(theme.SPACE_SM), dp(theme.SPACE_SM)],
+            size_hint_y=None, height=dp(theme.INPUT_HEIGHT),
+        )
+        self._value_input = box
+        self._panel.add_widget(box)
+
+        for unit_label, unit_seconds in VALUE_UNITS:
+            btn = BigButton(icon=self._cmd.icon, label=unit_label, variant="command")
+            btn.size_hint_y = None
+            btn.bind(on_release=lambda _b, u=unit_seconds: self._accept_manual_value(u))
+            self._panel.add_widget(btn)
+
+        back = BigButton(label="Back", variant="command")
+        back.size_hint_y = None
+        back.bind(on_release=lambda *_: self._build_value_step())
+        self._panel.add_widget(back)
+
+    def _accept_manual_value(self, unit_seconds):
+        from .command_registry import validate_manual_value
+
+        raw = self._value_input.text if self._value_input else ""
+        seconds, error = validate_manual_value(self._cmd.key, raw, unit_seconds)
+        if error:
+            # Rebuild rather than only swapping the label, so the field is cleared and the
+            # farmer retypes instead of editing a value that was already rejected once.
+            self._build_manual_value_step(error=error)
+            return
+        self._pick_value(seconds)
 
     # ── location capture (needs_location commands only) ──────────────────────
 
@@ -931,6 +993,13 @@ class ConfirmCommandDialog:
                 return f"{cmd.label}: {where}  (±{self._fix.accuracy_m:.0f} m)"
             return f"{cmd.label}: {where}"
         if cmd.needs_value:
+            if getattr(cmd, "allow_manual_value", False):
+                # "Reporting interval: 2700 seconds" is the protocol talking. A farmer who
+                # typed 45 minutes should be asked to confirm 45 minutes -- this is the last
+                # screen before a deployed node is reconfigured, so it has to be readable in
+                # the units they chose, whether they typed them or tapped a preset.
+                from .command_registry import _friendly_seconds
+                return f"{cmd.label}: every {_friendly_seconds(self._value)}"
             unit = cmd.value_label.lower()
             return f"{cmd.label}: {self._value} {unit}"
         return cmd.label

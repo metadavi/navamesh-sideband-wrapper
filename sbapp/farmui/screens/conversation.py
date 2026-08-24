@@ -36,6 +36,23 @@ class ConversationScreen(BoxLayout):
         # ── Back to Talk ────────────────────────────────────────────────────
         self.add_widget(BackBar(title="Gateway commands", on_back=app.go_home))
 
+        # ── Everything below the back bar scrolls as one page ───────────────
+        #
+        # It used to be only the reply area that scrolled, sitting in a fixed column
+        # beneath the gateway strip and a 14-tile command grid. Those took most of a
+        # phone screen and the ScrollView got what was left -- roughly a third. A
+        # `help` reply is 27 lines and landed in a viewport showing eight of them, so
+        # a complete answer read as a truncated one.
+        #
+        # Now the grid scrolls away with everything else and a reply renders at its
+        # natural height, which is what makes reading a long one a scroll rather than
+        # a squint. ResultCard already sizes itself from its texture, so nothing here
+        # needs to know how tall a reply is.
+        self._page = ScrollView(size_hint=(1, 1), do_scroll_x=False)
+        content = BoxLayout(orientation="vertical", size_hint_y=None,
+                            spacing=dp(SPACE_MD))
+        content.bind(minimum_height=content.setter("height"))
+
         # ── Gateway header (compact Field-Log status strip) ─────────────────
         # A single short line — "GATEWAY" caption + name + truncated hash — so the
         # reply area below gets the vertical space, not the header.
@@ -52,7 +69,7 @@ class ConversationScreen(BoxLayout):
         )
         self._gw_label.bind(size=lambda i, _s: setattr(i, "text_size", i.size))
         header.add_widget(self._gw_label)
-        self.add_widget(header)
+        content.add_widget(header)
 
         # ── Command button grid (3×3, compact parchment command tiles) ──────
         grid = GridLayout(cols=3, size_hint_y=None, spacing=dp(SPACE_SM))
@@ -63,22 +80,25 @@ class ConversationScreen(BoxLayout):
             btn.bind(on_press=lambda _, c=cmd: self._on_command(c))
             grid.add_widget(btn)
             self._cmd_buttons.append(btn)
-        self.add_widget(grid)
+        content.add_widget(grid)
 
-        # ── Message scroll area ────────────────────────────────────────────
-        self.add_widget(SectionHeading("Replies"))
+        # ── Replies ────────────────────────────────────────────────────────
+        content.add_widget(SectionHeading("Replies"))
 
-        scroll = ScrollView(size_hint=(1, 1))
         self._msgs = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(SPACE_SM))
         self._msgs.bind(minimum_height=self._msgs.setter("height"))
-        self._empty = EmptyState(icon="💬", message="No replies yet.\nTap a command above.")
+        # Explicit height: EmptyState stretches by default, and a stretching child
+        # contributes nothing to a minimum_height column, so it would collapse here.
+        self._empty = EmptyState(icon="💬", message="No replies yet.\nTap a command above.",
+                                 size_hint_y=None, height=dp(160))
         self._onboarding = ResultCard(
             text="[font=emoji]👋[/font] Welcome!\nGo to the [font=emoji]💬[/font] Talk tab and tap your farm gateway\nto open these commands.",
             use_markup=True,
         )
         self._msgs.add_widget(self._onboarding)
-        scroll.add_widget(self._msgs)
-        self.add_widget(scroll)
+        content.add_widget(self._msgs)
+        self._page.add_widget(content)
+        self.add_widget(self._page)
 
     @staticmethod
     def _gw_markup(display_name: str | None, short_hash: str | None) -> str:
@@ -123,6 +143,7 @@ class ConversationScreen(BoxLayout):
         self._waiting = ResultCard(
             text="[font=emoji]⏳[/font] Waiting for reply…", use_markup=True)
         self._msgs.add_widget(self._waiting)
+        self._reveal_replies()
 
     def add_result(self, text: str, image_bytes: bytes | None = None,
                    image_ext: str = "png"):
@@ -142,6 +163,29 @@ class ConversationScreen(BoxLayout):
                           image_ext=image_ext, use_markup=True, mono=True)
         self._result_cards.append(card)
         self._msgs.add_widget(card)
+        self._reveal_replies()
+
+    def _reveal_replies(self):
+        """Scroll the page down to the reply that just arrived.
+
+        Now that the command grid scrolls with the page, a reply lands below the fold:
+        without this the farmer taps a command and the screen appears not to change.
+
+        Deferred a frame rather than run inline, because a ResultCard's height comes
+        from its label texture and is still 0 at the moment it is added -- scrolling
+        immediately targets where the card was while it was empty, which is the top of
+        the page. 0.05 s is after the next layout pass on the deployed handsets.
+        """
+        from kivy.clock import Clock
+
+        def _do(_dt):
+            try:
+                self._page.scroll_to(self._msgs, padding=dp(SPACE_MD), animate=True)
+            except Exception:
+                # Never let a scrolling convenience take down the reply itself.
+                pass
+
+        Clock.schedule_once(_do, 0.05)
 
     def _set_buttons_enabled(self, enabled: bool):
         for btn in self._cmd_buttons:

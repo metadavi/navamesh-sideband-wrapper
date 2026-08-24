@@ -50,6 +50,17 @@ class Command:
     needs_location: bool = False
     # False → the node picker hides its "ALL FIELD NODES" button for this command.
     allow_broadcast: bool = True
+    # True → the value step offers "Enter a time" beside the presets, for a cadence the
+    # presets do not cover.
+    #
+    # A considered exception to the presets-only rule above, not a gap being filled. The
+    # precedent is set_location's "Enter coordinates", which exists because a live position
+    # has nothing sensible to preset. This is the other reason to break it: the presets are
+    # the cadences we expected, and an experiment is exactly the thing that wants one we did
+    # not. Unlike a coordinate pair, the value is an int with real bounds, so it is validated
+    # here as strictly as a preset would have been -- get_wire()'s bounds check still applies,
+    # which is why this is NOT modelled on needs_location's skip.
+    allow_manual_value: bool = False
 
 
 # Bounds mirror the firmware clamps (NavameshCommand.cpp) and the Pi's validation in
@@ -88,6 +99,10 @@ COMMANDS: list[Command] = [
         # an experiment can be wound back to normal without remembering the number.
         value_presets=(("5 min", 300), ("15 min", 900), ("30 min", 1800),
                        ("1 hour", 3600), ("8 hours", 28800), ("24 hours", 86400)),
+        # Farmers asked to time a specific node themselves rather than pick from this list.
+        # The wire unit stays seconds -- the app converts, so neither the Pi nor the firmware
+        # had to learn a new format for this.
+        allow_manual_value=True,
     ),
     Command(
         "quiet_on", "quiet {id} on", "🔇", "Pause messaging", True,
@@ -114,6 +129,66 @@ COMMANDS: list[Command] = [
                       "Stand next to the node before you send this."),
     ),
 ]
+
+# What "Enter a time" offers. Minutes and hours only: seconds is the protocol's unit and
+# nobody standing in a field thinks in it, and days would exceed the 24 h ceiling on the
+# first tap, which is a worse way to learn the bound than not being offered it.
+VALUE_UNITS = (("Minutes", 60), ("Hours", 3600))
+
+
+def seconds_from_units(magnitude, unit_seconds: int) -> int:
+    """Convert a farmer-entered number and unit into the seconds the wire carries.
+
+    Rounded to a whole second because the protobuf field is a uint32. Kept as a function
+    rather than inlined in the dialog so the conversion is testable off-device -- the UI
+    itself cannot run outside Android.
+    """
+    return int(round(float(magnitude) * int(unit_seconds)))
+
+
+def validate_manual_value(key: str, magnitude, unit_seconds: int):
+    """Return (seconds, error). Exactly one is None.
+
+    The bounds check is the same one get_wire() applies, run early so the farmer is told
+    while the number is still on screen rather than after they confirm. Rejecting rather
+    than clamping: someone who typed 30 hours meant something this cannot do, and quietly
+    giving them 24 would look like it worked.
+    """
+    cmd = get_command(key)
+    text = str(magnitude).strip()
+    if not text:
+        return None, "Enter a number first."
+    try:
+        value = float(text)
+    except ValueError:
+        return None, f"{text!r} is not a number."
+    if value <= 0:
+        return None, "Enter a number greater than zero."
+
+    seconds = seconds_from_units(value, unit_seconds)
+    if not cmd.value_min <= seconds <= cmd.value_max:
+        return None, (
+            f"Must be between {_friendly_seconds(cmd.value_min)} and "
+            f"{_friendly_seconds(cmd.value_max)}. That is {_friendly_seconds(seconds)}."
+        )
+    return seconds, None
+
+
+def _friendly_seconds(seconds: int) -> str:
+    """Seconds as a person would say them. Mirrors the gateway's _friendly_seconds so an
+    out-of-range message here reads like the confirmations that follow it."""
+    s = int(seconds)
+    if s % 86400 == 0 and s >= 86400:
+        n = s // 86400
+        return f"{n} day" if n == 1 else f"{n} days"
+    if s % 3600 == 0 and s >= 3600:
+        n = s // 3600
+        return f"{n} hour" if n == 1 else f"{n} hours"
+    if s % 60 == 0 and s >= 60:
+        n = s // 60
+        return f"{n} minute" if n == 1 else f"{n} minutes"
+    return f"{s} seconds"
+
 
 COMMAND_WIRE_STRINGS = [c.wire for c in COMMANDS]
 
