@@ -92,8 +92,14 @@ COMMANDS: list[Command] = [
     Command(
         "quiet_on", "quiet {id} on", "🔇", "Pause messaging", True,
         is_write=True, value_choices=("on",),
+        # "after a day", not "within 3 days": the UI sends no duration, so the node
+        # applies NAVAMESH_QUIET_DEFAULT_MINUTES = 1440. 4320 (three days) is only the
+        # firmware's clamp ceiling. Caught on the bench when the ack came back
+        # applied=1440 against text promising three days -- not false, but wrong in the
+        # direction that matters: a farmer expecting three days of quiet gets the sensor
+        # back after one, and one who wants it back sooner thinks they must wait three.
         confirm_hint=("The node stops sending but keeps listening, so you can resume it "
-                      "at any time. It also resumes on its own within 3 days, and any "
+                      "at any time. It also resumes on its own after a day, and any "
                       "reboot resumes it immediately."),
     ),
     Command(

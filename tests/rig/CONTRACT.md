@@ -29,7 +29,7 @@ therefore only applies once that variable is populated.
 |---------|-------|----------------|-------|
 | `ble` | `ble <!id\|^all> <minutes>` | `"📤 Queued: Bluetooth window for N min → …"` then a later ack | 1–240 minutes |
 | `interval` | `interval <!id\|^all> <seconds>` | `"📤 Queued: telemetry interval N s → …"` then a later ack | 300–86400 seconds |
-| `quiet` | `quiet <!id\|^all> on\|off` | `"📤 Queued: quiet mode ON/OFF → …"` then a later ack | auto-resumes within 3 days |
+| `quiet` | `quiet <!id\|^all> on\|off` | `"📤 Queued: quiet mode ON/OFF → …"` then a later ack | auto-resumes after a day (firmware default 1440 min; 4320 is only the clamp ceiling) |
 | `setloc` | `setloc <!id> <lat> <lon>` | `"📤 Queued: fixed position LAT, LON → …"` then a later ack | decimal degrees, 7 dp; **no `^all`** |
 | unauthorized | any of the above | `"Unauthorized: this gateway does not accept control commands from you."` | nothing is transmitted |
 | bad value | e.g. `ble !x 999` | `"⚠️  …must be …"` | rejected before transmit |
