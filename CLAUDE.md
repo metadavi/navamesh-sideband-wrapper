@@ -18,6 +18,31 @@ confirmation dialogs and the value presets in `command_registry.py`. When both a
 play, keep them saying the same thing: the Pi's `test_farmer_wording.py` pins its help
 text to the same vocabulary as these buttons.
 
+## Planned next (2026-08-24): manual entry for the reporting interval
+
+Being built on the Mac. What to know before touching `command_registry.py`:
+
+The write commands offer **`value_presets` only, deliberately**. The comment there records
+two reasons: it keeps the "no typing anywhere" rule the rest of this UI follows, and a
+preset list makes an out-of-range value impossible to enter in the first place. So adding a
+manual field is a considered exception, not a gap being filled.
+
+The precedent to follow is `set_location`, which uses `needs_location` rather than
+`needs_value` and offers "Enter coordinates" beside "Use my current location" — because a
+live position is the one value with nothing sensible to preset. `get_wire()` substitutes a
+`needs_location` value verbatim and skips the int bounds check, which would be meaningless
+for a coordinate pair. A manual *interval* is the opposite case: it is an int and the bounds
+do apply, so it must still be validated here rather than borrowing that skip.
+
+Bounds stay **triplicated** — this UI, then the Pi's `processors/command_proto.py`, then the
+firmware clamp — so a bad value is stopped early, explained in the middle, and clamped as a
+last resort. `value_min=60`, `value_max=86400` here; 300 s is the firmware's practical floor.
+Do not relax the UI bound on the grounds that the Pi also checks.
+
+One thing worth carrying into the confirm text: the ack is authoritative, and a **timeout is
+not a failure**. On a marginal link a command can apply on the node while its ack is lost —
+observed on the bench. See the Pi repo's `CLAUDE.md` for the RSSI numbers behind that.
+
 ## Where our code lives
 
 `sbapp/farmui/` is ours. Nearly everything else is upstream Sideband, and
