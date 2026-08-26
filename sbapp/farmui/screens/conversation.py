@@ -223,6 +223,15 @@ class ConversationScreen(BoxLayout):
                 content = sv.children[0] if sv.children else None
                 if content is None or not target.parent:
                     return
+                if sv.height <= 0 or content.height <= 0:
+                    # Laid out but not yet sized. Observed on the deployed handset
+                    # during startup: sv.height 0 against a content height of
+                    # 129788, i.e. every child reporting its unconstrained
+                    # minimum. Dividing by that yields a scroll fraction with no
+                    # relation to the finished page, and it is applied to a real
+                    # ScrollView. The later passes below run once the sizes are
+                    # real, so there is nothing to do but wait.
+                    return
                 span = content.height - sv.height
                 if span <= 0:
                     # The whole page fits; there is nothing to reveal and any
@@ -231,13 +240,63 @@ class ConversationScreen(BoxLayout):
                     return
                 # content.y == sv.y - scroll_y * span, so the scroll fraction that
                 # brings `target`'s top level with the viewport's top is:
-                offset = target.top - content.y      # target top within the content
+                # content.y is 0: since Kivy 1.8 a ScrollView scrolls its viewport
+                # with a canvas matrix and pins the widget at the origin, so
+                # target.top is already the target's offset from the bottom of the
+                # page and the subtraction is what keeps this honest if that ever
+                # changes back.
+                offset = target.top - content.y
+                # Clamped, and the clamp does real work rather than guarding an
+                # edge case. Measured on the handset for the tallest reply we
+                # have: page 1634, viewport 1177, so only 457 px of travel exist,
+                # while the card sits at the very bottom and asks for -0.83.
+                # Pinning that to 0 puts the page as far down as it goes, which
+                # shows the card whole -- the best the geometry allows, and the
+                # right answer rather than a fallback.
                 sv.scroll_y = max(0.0, min(1.0, (offset - sv.height) / span))
             except Exception:
                 # Never let a scrolling convenience take down the reply itself.
                 pass
 
-        Clock.schedule_once(_do, 0.05)
+        # One shot on a timer is not enough, and `help` is the proof: a ResultCard
+        # takes its height from its label texture, so it is 0 when added and, for
+        # the tallest reply in the system, still growing several frames later.
+        # Worse, the number this calculation actually depends on is the *page*
+        # height, which the card reaches only through a chain of bindings --
+        # card.height -> _msgs.minimum_height -> _msgs.height ->
+        # content.minimum_height -> content.height -- and each link resolves on a
+        # later frame. Anchoring against a page that is still growing lands short,
+        # which is exactly the mid-button stop this is meant to remove.
+        #
+        # So re-anchor as the page height settles, watching `content` rather than
+        # the card because content.height is the term in the formula. _do is
+        # idempotent -- it solves for an absolute scroll_y rather than nudging the
+        # current one -- so repeats cost nothing and cannot accumulate error.
+        content = self._page.children[0] if self._page.children else None
+
+        def _on_height(_inst, _value):
+            Clock.schedule_once(_do, 0)
+
+        def _unbind(_dt):
+            try:
+                if content is not None:
+                    content.unbind(height=_on_height)
+            except Exception:
+                pass
+
+        try:
+            if content is not None:
+                content.bind(height=_on_height)
+            # Belt and braces: fixed passes as well, in case the page settles
+            # without a height event we are bound to (a card that renders at its
+            # final size in one go never fires one).
+            for delay in (0.05, 0.2, 0.5, 1.0):
+                Clock.schedule_once(_do, delay)
+            # Released promptly, so it can never fight the farmer's own scrolling
+            # once the reply has settled.
+            Clock.schedule_once(_unbind, 1.5)
+        except Exception:
+            pass
 
     def _set_buttons_enabled(self, enabled: bool):
         for btn in self._cmd_buttons:
