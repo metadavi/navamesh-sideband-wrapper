@@ -178,11 +178,20 @@ def test_a_new_reply_scrolls_itself_into_view():
     taps a command and the screen appears not to change."""
     import inspect
     from sbapp.farmui.screens import conversation
-    assert "self._reveal_replies()" in inspect.getsource(
+    # The card that just arrived is passed in, rather than the reveal picking a
+    # target for itself. It used to scroll to self._msgs -- the box holding every
+    # card -- which drifts further from the new reply as replies accumulate and
+    # settles mid-way through a row of command buttons, slicing it in half.
+    assert "self._reveal_replies(card)" in inspect.getsource(
         conversation.ConversationScreen.add_result)
     reveal = inspect.getsource(conversation.ConversationScreen._reveal_replies)
     # Deferred: a ResultCard's height comes from its texture and is 0 when added.
     assert "Clock.schedule_once" in reveal
-    assert "scroll_to" in reveal
+    # Anchored by arithmetic on scroll_y, deliberately NOT ScrollView.scroll_to:
+    # scroll_to only undertakes to put the target somewhere on screen, and for a
+    # reply taller than the viewport (help is 27 lines) it can satisfy that by
+    # showing the end of it. The farmer needs to start at the first line.
+    assert "scroll_y" in reveal
+    assert "target.top" in reveal
     # And it must never be able to take down the reply it is scrolling to.
     assert "except Exception" in reveal

@@ -138,12 +138,38 @@ class ConversationScreen(BoxLayout):
         self._clear_results()
         if not self._empty.parent:
             self._msgs.add_widget(self._empty)
+        # Back to the top, or the screen opens part-scrolled.
+        #
+        # scroll_y is a fraction of a span that has just collapsed: clearing the
+        # cards shrinks the page, but the ScrollView keeps whatever fraction the
+        # last reply scrolled it to. With the page now shorter than the viewport
+        # that fraction is applied to a negative span, which lays the content out
+        # from the bottom and opens a band of empty parchment above the gateway
+        # strip. That is the "it opens scrolled down with a gap at the top" --
+        # the page was never re-anchored on the way in.
+        #
+        # Deferred, because the cards are removed this frame and the height they
+        # contributed is not gone until the next layout pass; setting scroll_y
+        # before then is overwritten by that pass.
+        self._scroll_to_top()
+
+    def _scroll_to_top(self):
+        from kivy.clock import Clock
+
+        def _do(_dt):
+            try:
+                self._page.scroll_y = 1
+            except Exception:
+                pass
+
+        Clock.schedule_once(_do, 0)
+        Clock.schedule_once(_do, 0.05)
 
     def _show_waiting(self):
         self._waiting = ResultCard(
             text="[font=emoji]⏳[/font] Waiting for reply…", use_markup=True)
         self._msgs.add_widget(self._waiting)
-        self._reveal_replies()
+        self._reveal_replies(self._waiting)
 
     def add_result(self, text: str, image_bytes: bytes | None = None,
                    image_ext: str = "png"):
@@ -163,13 +189,25 @@ class ConversationScreen(BoxLayout):
                           image_ext=image_ext, use_markup=True, mono=True)
         self._result_cards.append(card)
         self._msgs.add_widget(card)
-        self._reveal_replies()
+        self._reveal_replies(card)
 
-    def _reveal_replies(self):
-        """Scroll the page down to the reply that just arrived.
+    def _reveal_replies(self, card=None):
+        """Put the first line of the reply that just arrived at the top of the view.
 
         Now that the command grid scrolls with the page, a reply lands below the fold:
         without this the farmer taps a command and the screen appears not to change.
+
+        It used to scroll to `self._msgs`, the box holding *every* card, rather than
+        to the new one. ScrollView.scroll_to only guarantees the target is on screen,
+        so with a box taller than the viewport it settles wherever that box's edge
+        lands -- which drifts further as replies accumulate and stops on a half-row of
+        command buttons, sliced through the middle. That reads as a rendering fault
+        rather than as a scroll position.
+
+        Anchoring is done by arithmetic instead of scroll_to, because "visible" and
+        "starting at the top" are different requests and only the second one is
+        useful here: a `help` reply is taller than the screen, and a scroll that
+        merely brings it into view can satisfy itself by showing the *end* of it.
 
         Deferred a frame rather than run inline, because a ResultCard's height comes
         from its label texture and is still 0 at the moment it is added -- scrolling
@@ -180,7 +218,21 @@ class ConversationScreen(BoxLayout):
 
         def _do(_dt):
             try:
-                self._page.scroll_to(self._msgs, padding=dp(SPACE_MD), animate=True)
+                sv = self._page
+                target = card if (card is not None and card.parent) else self._msgs
+                content = sv.children[0] if sv.children else None
+                if content is None or not target.parent:
+                    return
+                span = content.height - sv.height
+                if span <= 0:
+                    # The whole page fits; there is nothing to reveal and any
+                    # fraction other than 1 would just float it off the top.
+                    sv.scroll_y = 1
+                    return
+                # content.y == sv.y - scroll_y * span, so the scroll fraction that
+                # brings `target`'s top level with the viewport's top is:
+                offset = target.top - content.y      # target top within the content
+                sv.scroll_y = max(0.0, min(1.0, (offset - sv.height) / span))
             except Exception:
                 # Never let a scrolling convenience take down the reply itself.
                 pass
