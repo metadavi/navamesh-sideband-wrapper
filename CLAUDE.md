@@ -7,7 +7,8 @@ gateway" into buttons a person can use standing in a field.
 Cross-repo context, including how a command reaches a sensor and back, is in the
 **Navamesh** repo's `CLAUDE.md`. This file is about this repo.
 
-Branch: **`raw-adc-private-app`**. Current release **1.9.19** (`android.numeric_version = 20260828`), 2026-08-24.
+Branch: **`raw-adc-private-app`**. Current release **1.9.23** (`android.numeric_version = 20260832`), 2026-08-26.
+`main` was fast-forwarded to match on 2026-08-26, so `spirit-farm-pi` can pull it.
 
 **Most farmer-facing wording is not in this repo.** The app sends a verb and renders
 whatever the gateway returns, so `help` and every reply body — soil, status, node list,
@@ -16,6 +17,56 @@ needs a Pi deploy and **no APK rebuild**. What lives here is the button labels, 
 confirmation dialogs and the value presets in `command_registry.py`. When both are in
 play, keep them saying the same thing: the Pi's `test_farmer_wording.py` pins its help
 text to the same vocabulary as these buttons.
+
+## Built 2026-08-26: the reply screen stays anchored (1.9.20 → 1.9.23)
+
+Two complaints, one screen. It took four builds because the first three were reasoned
+about rather than measured — the numbers are below so the next person can skip that.
+
+**It opened part-scrolled, with a band of empty parchment above the gateway strip.**
+`scroll_y` is a fraction of a span that `reset_replies()` had just collapsed: clearing the
+cards makes the page shorter than the viewport while the ScrollView keeps the fraction the
+last reply left behind. Kivy's `update_from_scroll` has `always_overscroll` true by
+default, so it applies that fraction to a *negative* span and lays the content out from
+the bottom. The page is re-anchored to the top on the way in, deferred a frame because the
+removed cards still contribute their height until the next layout pass.
+
+**Tapping a command stopped on a row of command buttons sliced through the middle.**
+`_reveal_replies()` scrolled to `self._msgs` — the box holding *every* card — not to the
+reply that had just arrived, so where it settled depended on how many commands had been
+run. It now takes the new card as an argument and positions it by arithmetic on `scroll_y`
+rather than `ScrollView.scroll_to`, because scroll_to only undertakes to put the target
+*somewhere* on screen and for a reply taller than the viewport it can honour that by
+showing the end of it — the wrong end to start reading from.
+
+Facts worth keeping, all measured on the deployed moto g play:
+
+- **`content.y` is always 0.** Since Kivy 1.8 a ScrollView scrolls its viewport with a
+  canvas matrix and pins the widget at the origin (`vp.pos = 0, 0; g_translate.xy = x, y`),
+  so a child's `.top` is already its offset from the bottom of the page. The relationship
+  the anchor inverts is `vp.y = sv.y - scroll_y * span`.
+- **The clamp is load-bearing, not a guard.** For `help`, the tallest reply: page 1634 px,
+  viewport 1177 px, so only **457 px of travel exist**, while the card sits at the bottom
+  and the ideal anchor asks for **-0.83**. Pinning to 0 shows the card whole, which is the
+  best the geometry allows. **The cropped button row at the top edge is simply where the
+  page runs out — no scroll position avoids it.** Do not "fix" it again.
+- **Never anchor against an unsized page.** During startup the reveal fires with
+  `sv.height` 0 against a content height of **129788** — every child reporting its
+  unconstrained minimum. Dividing by that produced a scroll fraction unrelated to the
+  finished page and applied it to a live ScrollView. Sizes are checked first now.
+- **Re-anchor on `content.height`, not on the card.** `content.height` is the term in the
+  formula, and the card reaches it through `card.height -> _msgs.minimum_height ->
+  _msgs.height -> content.minimum_height -> content.height`, each resolving a frame later.
+  Fixed passes at 0.05/0.2/0.5/1.0 s back the binding up for a card that renders at its
+  final size in one go and never fires a height event. The anchor is idempotent — it
+  solves for an absolute `scroll_y` — so repeats are free.
+
+**`parse_nodes_reply()` is a wire contract with the Pi, and it is fragile.** It keeps
+every line starting with `!` **whole** and uses it as the node id. A stale node's picker
+entry was therefore literally `!79d4bb41  ⚠️ no readings in 2h`, and every command aimed at
+it went to that string. Fixed on the Pi (the id sits alone on its line, details go on a
+`·` continuation line the parser drops) rather than here, so unchanged handsets benefit —
+but if this parser is ever touched, that is the invariant it is holding up.
 
 ## Built 2026-08-24: manual interval entry, and a reply area that fits
 
@@ -135,7 +186,7 @@ to resume against.
   --ignore=tests/test_e2e_conversation.py --ignore=tests/test_protocol_roundtrip.py
 ```
 
-**268 passed.** The two ignored modules need a live RNS TCP testnet. Unlike the Navamesh
+**286 passed** (2026-08-26). The two ignored modules need a live RNS TCP testnet. Unlike the Navamesh
 repo, this suite does not silently skip — a `.venv` is present and complete.
 
 Android-only glue (jnius, PackageInstaller, LocationManager) is covered by **source
