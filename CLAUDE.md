@@ -170,14 +170,38 @@ that machine would publish an eight-version regression, and the `version.json` i
 would point the whole fleet at it. Check what the Pi is already serving
 (`cat ~/navamesh-updates/version.json`) before publishing from anywhere.
 
-State as of 2026-08-23: the dev Pi (`/home/tj/navamesh-updates`) serves **1.9.18**;
-`spirit-farm-pi` (`/home/pi/navamesh-updates`) still serves **1.9.8** and needs the
-newer APK copied over during the deployment rollout.
+State as of **2026-08-26**: both Pis serve **1.9.23** — the dev Pi at
+`/home/tj/navamesh-updates` and `spirit-farm-pi` at `/home/pi/navamesh-updates`. The farm
+had been on 1.9.8 since July, so the phones there are jumping fifteen releases at once.
 
 `scripts/pi_update_server/` holds the Pi side: a Range-capable static server. The stock
 `python -m http.server` answers a Range request with 200 and the whole file, which meant an
 interrupted 91 MB download restarted from byte 0 and DownloadManager's resume had nothing
 to resume against.
+
+**Deploying that server is per-host state, like `bin/` on PATH — git does not carry it.**
+Found on 2026-08-26: `spirit-farm-pi` had been running the stock
+`python3 -m http.server 8090 --directory /home/pi/navamesh-updates` the whole time, so
+every OTA there was non-resumable, over the worst link in the project. Confirmed by the
+symptom the module gives you: a Range request answered **200** instead of 206. Now
+installed there (`/usr/local/bin/navamesh_update_server.py` + the unit from this repo, old
+unit backed up alongside it) and verified returning `206` with a correct `Content-Range`.
+**Check for 206 on any new Pi before trusting an OTA:**
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -r 0-999 http://<pi>:8090/<the>.apk   # want 206
+```
+
+The unit shipped here already defaults to `/home/pi/navamesh-updates` and port 8090, so on
+a farm Pi it needs no edits; the dev Pi is the one that wants the
+`NAVAMESH_UPDATES_DIR=/home/tj/...` override the file documents.
+
+Range support fixes resumption, not sleep. An OTA that is interrupted can now continue
+where it stopped, but the **download-through-sleep** work landed after 1.9.8 — so phones
+still on 1.9.8 are running the client that dies when the screen goes off, and they have to
+survive one 91 MB download on the old client before they get the fix. Tell whoever is
+holding the phones to keep them awake for that first update; from 1.9.23 onward it handles
+itself.
 
 ## Tests
 
