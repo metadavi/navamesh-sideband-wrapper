@@ -90,7 +90,7 @@ COMMANDS: list[Command] = [
                        ("1 hour", 60), ("2 hours", 120)),
     ),
     Command(
-        "set_interval", "interval {id} {value}", "⏱", "Set reporting interval", True,
+        "set_interval", "interval {id} {value}", "⏱", "Set Reporting Interval", True,
         is_write=True, needs_value=True, value_label="Seconds",
         value_default=1800, value_min=60, value_max=86400,
         confirm_hint=("How often the node reports. Shorter gives finer data but uses more "
@@ -123,7 +123,7 @@ COMMANDS: list[Command] = [
         confirm_hint="The node starts sending readings again.",
     ),
     Command(
-        "set_location", "setloc {id} {value}", "📍", "Change sensor location", True,
+        "set_location", "setloc {id} {value}", "📍", "Change Sensor Location", True,
         is_write=True, needs_location=True, allow_broadcast=False,
         confirm_hint=("The node has no GPS of its own, so it uses your phone's position. "
                       "Stand next to the node before you send this."),

@@ -14,6 +14,7 @@ _DEFAULT = {
     "gateway_hash":         None,
     "gateway_display_name": None,
     "node_cache":           [],
+    "node_labels":          {},
     "peer_aliases":         {},
     "update_urls":          None,   # None → updater's DEFAULT_UPDATE_URLS
     "pending_download":     None,   # {"id": int, "version": str} while an OTA download is in flight
@@ -65,6 +66,15 @@ class FarmSettings:
     @node_cache.setter
     def node_cache(self, value: list[str]):
         self._data["node_cache"] = list(value)
+        self._save()
+
+    @property
+    def node_labels(self) -> dict:
+        return self._data.get("node_labels", {})
+
+    @node_labels.setter
+    def node_labels(self, value: dict):
+        self._data["node_labels"] = dict(value)
         self._save()
 
     # ── Local peer aliases (UI-only) ────────────────────────────────────────

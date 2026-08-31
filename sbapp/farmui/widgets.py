@@ -599,7 +599,8 @@ class EmptyState(BoxLayout):
 class NodePickerDialog:
     """Selection-only "pick a node to map" dialog (Map — one node).
 
-    Lists the node IDs the gateway reported via its "List nodes" reply. The
+    Lists the nodes the gateway reported via its "List nodes" reply, showing each
+    one's long name where it has one and its id where it does not. The
     farmer taps one node and the wrapper sends `map <id>` — no typing anywhere.
     If no nodes are cached yet it shows a friendly hint and only a Close button,
     and never picks/sends anything. Built on the same ModalView + Panel + BigButton
@@ -607,7 +608,7 @@ class NodePickerDialog:
     """
 
     def __init__(self, nodes, on_pick, heading="Pick a node to map",
-                 include_broadcast=False):
+                 include_broadcast=False, labels=None):
         from kivy.uix.modalview import ModalView
         from kivy.uix.scrollview import ScrollView
 
@@ -636,8 +637,13 @@ class NodePickerDialog:
             col = BoxLayout(orientation="vertical", size_hint_y=None,
                             spacing=dp(theme.SPACE_SM))
             col.bind(minimum_height=col.setter("height"))
+            # The farmer reads the name they gave the node; the id is still what
+            # _choose() sends, so a relabelled node is not a different target.
+            # Falls back to the id for a node the gateway had no name for.
+            labels = labels or {}
             for node_id in nodes:
-                btn = BigButton(icon="🛰", label=node_id, variant="command")
+                btn = BigButton(icon="🛰", label=labels.get(node_id) or node_id,
+                                variant="command")
                 btn.bind(on_release=lambda _b, nid=node_id: self._choose(nid))
                 col.add_widget(btn)
             scroll.add_widget(col)

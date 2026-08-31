@@ -237,6 +237,41 @@ def parse_nodes_reply(text: str) -> list[str]:
     return [n for n in nodes if n.startswith("!")]
 
 
+def parse_node_labels(text: str) -> dict[str, str]:
+    """Map node id -> the gateway's human label, from a 'nodes' command reply.
+
+    The gateway prints each id alone on its line and puts everything else about
+    the node on a continuation line beneath it, prefixed "\u00b7":
+
+        !061d8b62
+          \u00b7 Node A  \u26a0\ufe0f no readings in 2h
+
+    parse_nodes_reply() keeps the id lines whole and drops the continuations,
+    which is what lets a flagged node still be commanded; this reads the
+    continuations it drops, so the picker can show "Node A" instead of the hex.
+
+    Two shapes have to be told apart. The gateway omits the label segment when
+    the name would only be its own "Node bb41" fallback, but still emits the
+    continuation if there is a health note -- so a line may carry a note with no
+    label. Everything before the first warning sign is the name; if that is
+    empty, the node simply has no label and the caller falls back to the id.
+    """
+    labels: dict[str, str] = {}
+    current: Optional[str] = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("!"):
+            current = line
+        elif current and line.startswith("\u00b7"):
+            label = line.lstrip("\u00b7").strip().split("\u26a0", 1)[0].strip()
+            if label:
+                labels[current] = label
+            current = None
+        else:
+            current = None
+    return labels
+
+
 def extract_image(message_fields: dict) -> Optional[bytes]:
     """Return JPEG bytes from LXMF FIELD_IMAGE if present, None otherwise."""
     if not message_fields:

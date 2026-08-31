@@ -120,6 +120,74 @@ def test_parse_nodes_reply_ignores_non_node_reply():
     assert parse_nodes_reply(status) == []
 
 
+# ── parse_node_labels: the continuation line parse_nodes_reply drops ──────────
+
+_LABELLED_REPLY = (
+    "Known field nodes:\n"
+    "  !061d8b62\n    \u00b7 Node A\n"
+    "  !79d4bb41\n    \u00b7 Node B  \u26a0\ufe0f no readings in 2h\n"
+    "  !982a7572\n    \u00b7 \u26a0\ufe0f no readings in 3h\n"
+    "  !bare0001"
+)
+
+
+def test_parse_node_labels_reads_long_names():
+    from sbapp.farmui.dispatch import parse_node_labels
+    labels = parse_node_labels(_LABELLED_REPLY)
+    assert labels["!061d8b62"] == "Node A"
+    # A health note follows the label on the same line and must be stripped off.
+    assert labels["!79d4bb41"] == "Node B"
+
+
+def test_parse_node_labels_skips_note_only_and_bare_nodes():
+    """A continuation carrying only a warning is not a label, and a node with no
+    continuation at all has none either -- both must fall back to the id."""
+    from sbapp.farmui.dispatch import parse_node_labels
+    labels = parse_node_labels(_LABELLED_REPLY)
+    assert "!982a7572" not in labels
+    assert "!bare0001" not in labels
+
+
+def test_parse_node_labels_ignores_non_node_reply():
+    from sbapp.farmui.dispatch import parse_node_labels
+    assert parse_node_labels("Farm status\nSoil: 42%\nBattery: 88%") == {}
+
+
+def test_parse_nodes_reply_still_returns_every_id():
+    """Labels are additive: a node without a name is still commandable."""
+    from sbapp.farmui.dispatch import parse_nodes_reply
+    assert parse_nodes_reply(_LABELLED_REPLY) == [
+        "!061d8b62", "!79d4bb41", "!982a7572", "!bare0001",
+    ]
+
+
+def test_node_picker_button_shows_label_not_id():
+    from sbapp.farmui import widgets
+    src = inspect.getsource(widgets.NodePickerDialog)
+    assert "labels" in inspect.signature(widgets.NodePickerDialog.__init__).parameters
+    # The button reads the label; the id is what _choose() still sends.
+    assert "labels.get(node_id) or node_id" in src
+    assert "self._choose(nid)" in src
+
+
+def test_open_node_picker_passes_labels_and_confirm_uses_them():
+    from sbapp.farmui.app import FarmApp
+    picker = inspect.getsource(FarmApp.open_node_picker)
+    assert "labels=" in picker
+    confirm = inspect.getsource(FarmApp.open_command_confirm)
+    # The dialog displays the label but must keep addressing the id.
+    assert "self._node_labels.get(node_id) or node_id" in confirm
+    assert "node_id=node_id" in confirm
+
+
+def test_node_labels_survive_relaunch():
+    from sbapp.farmui import settings as settings_mod
+    assert "node_labels" in settings_mod._DEFAULT
+    s, _ = _settings_in_tmp()
+    s.node_labels = {"!061d8b62": "Node A"}
+    assert s.node_labels == {"!061d8b62": "Node A"}
+
+
 # ── Preset relabels (Feature 3) ────────────────────────────────────────────────
 
 def test_preset_labels_renamed():

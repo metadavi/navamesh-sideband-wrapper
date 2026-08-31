@@ -58,6 +58,10 @@ class FarmApp(App):
         self._gateway_hash = None
         self._gateway_name = "(none)"
         self._node_cache: list[str] = []
+        # id -> gateway label, from the same "List nodes" reply. Kept beside
+        # the id list rather than replacing it: the id is what gets sent, the
+        # label is only what the farmer reads.
+        self._node_labels: dict[str, str] = {}
         # Hashes of gateway replies already shown in the gateway command screen.
         self._shown_msgs: set[str] = set()
         # Active peer conversation (Talk → tap a non-gateway device) + the
@@ -1090,8 +1094,10 @@ class FarmApp(App):
             # Restore the cached node IDs (from prior "List nodes" replies) so
             # "Map — one node" can offer them straight after a relaunch.
             self._node_cache = list(self._settings.node_cache)
+            self._node_labels = dict(self._settings.node_labels)
         except Exception:
             self._node_cache = []
+            self._node_labels = {}
         try:
             saved_hash = self._settings.gateway_hash
             if not saved_hash:
@@ -1296,14 +1302,17 @@ class FarmApp(App):
         isn't a "List nodes" response yields [] and leaves the cache untouched.
         """
         try:
-            from .dispatch import parse_nodes_reply
+            from .dispatch import parse_nodes_reply, parse_node_labels
             nodes = parse_nodes_reply(text)
+            labels = parse_node_labels(text)
         except Exception:
             return
         if nodes:
             self._node_cache = nodes
+            self._node_labels = labels
             try:
                 self._settings.node_cache = nodes
+                self._settings.node_labels = labels
             except Exception:
                 pass
 
@@ -1324,6 +1333,7 @@ class FarmApp(App):
         allow_broadcast = getattr(cmd, "allow_broadcast", True)
         NodePickerDialog(
             nodes=list(self._node_cache),
+            labels=dict(self._node_labels),
             on_pick=lambda node_id: on_pick(cmd.key, node_id),
             heading=f"{cmd.label} — pick a target" if is_write else "Pick a node to map",
             include_broadcast=is_write and allow_broadcast,
@@ -1339,7 +1349,7 @@ class FarmApp(App):
         ConfirmCommandDialog(
             cmd=cmd,
             node_id=node_id,
-            node_label=node_id,
+            node_label=self._node_labels.get(node_id) or node_id,
             on_confirm=lambda value: on_confirm(cmd.key, node_id, value),
         ).open()
 
