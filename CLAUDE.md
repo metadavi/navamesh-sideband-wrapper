@@ -7,7 +7,7 @@ gateway" into buttons a person can use standing in a field.
 Cross-repo context, including how a command reaches a sensor and back, is in the
 **Navamesh** repo's `CLAUDE.md`. This file is about this repo.
 
-Branch: **`raw-adc-private-app`**. Current release **1.9.23** (`android.numeric_version = 20260832`), 2026-08-26.
+Branch: **`raw-adc-private-app`**. Current release **1.9.24** (`android.numeric_version = 20260833`), 2026-08-30.
 `main` was fast-forwarded to match on 2026-08-26, so `spirit-farm-pi` can pull it.
 
 **Most farmer-facing wording is not in this repo.** The app sends a verb and renders
@@ -170,9 +170,13 @@ that machine would publish an eight-version regression, and the `version.json` i
 would point the whole fleet at it. Check what the Pi is already serving
 (`cat ~/navamesh-updates/version.json`) before publishing from anywhere.
 
-State as of **2026-08-26**: both Pis serve **1.9.23** — the dev Pi at
-`/home/tj/navamesh-updates` and `spirit-farm-pi` at `/home/pi/navamesh-updates`. The farm
-had been on 1.9.8 since July, so the phones there are jumping fifteen releases at once.
+State as of **2026-08-30**: the Pis are **split**. `devpi` serves **1.9.24** at
+`/home/tj/navamesh-updates`; `spirit-farm-pi` is still on **1.9.23** at
+`/home/pi/navamesh-updates`. 1.9.24 was built at the ISU conference on an iPhone hotspot,
+and 91 MB of cellular to New Mexico was not worth it that night — the APK is in `dist/`
+and the farm publish is tracked in the Navamesh repo's `TODO.md`. Before that, both Pis
+served 1.9.23; the farm had been on 1.9.8 since July, so the phones there are jumping
+fifteen releases at once.
 
 `scripts/pi_update_server/` holds the Pi side: a Range-capable static server. The stock
 `python -m http.server` answers a Range request with 200 and the whole file, which meant an
